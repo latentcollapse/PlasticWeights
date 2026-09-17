@@ -1,29 +1,8 @@
 """
     Snapshot
 
-Immutable snapshot for DCP decision-making.
-
-The DCP sees only immutable declared snapshot fields.
-Created at step 10 of the tick order.
-
-Snapshot must contain every declared value the rule reads:
-- site_index
-- q
-- allocated
-- superplastic
-- stress_ema
-- residual_motion_ema
-- consecutive_above_yield
-- consecutive_stable
-- yield_up (from region)
-- settle_down (from region)
-- k_yield (from region)
-- k_settle (from region)
-- epsilon_delta (from region)
-- hot_capacity / budget eligibility boolean(s) needed for melt
-
-The same DCP is used for ZCS and VPS. Do not include branch-specific exposure values
-in the DCP snapshot unless a rule actually requires them. Stage-0 rules do not.
+Immutable declared DCP input. The controller has no access to substrate globals
+or latent residual values outside this typed value object.
 """
 struct Snapshot
     site_index::Int32
@@ -39,52 +18,32 @@ struct Snapshot
     k_yield::Int32
     k_settle::Int32
     epsilon_delta::Float32
-    has_hot_capacity::Bool  # budget/hot slot availability for melt
+    melt_budget_available::Bool
     tick::Int32
-    
-    function Snapshot(site_index::Integer, q::Integer, 
-                     allocated::Bool, superplastic::Bool,
-                     stress_ema::Real, residual_motion_ema::Real,
-                     consecutive_above_yield::Integer, consecutive_stable::Integer,
-                     yield_up::Real, settle_down::Real,
-                     k_yield::Integer, k_settle::Integer,
-                     epsilon_delta::Real,
-                     has_hot_capacity::Bool,
-                     tick::Integer)
-        # Validate q is in valid range
-        if !(q in (-1, 0, 1))
-            error("HardFailure: Snapshot q must be in {-1,0,+1}, got $q")
-        end
-        
+
+    function Snapshot(site_index::Integer, q::Integer,
+                      allocated::Bool, superplastic::Bool,
+                      stress_ema::Real, residual_motion_ema::Real,
+                      consecutive_above_yield::Integer, consecutive_stable::Integer,
+                      yield_up::Real, settle_down::Real,
+                      k_yield::Integer, k_settle::Integer,
+                      epsilon_delta::Real, melt_budget_available::Bool,
+                      tick::Integer)
+        q in (-1, 0, 1) || error("HardFailure: snapshot q must be ternary")
         new(Int32(site_index), Int8(q), allocated, superplastic,
             Float32(stress_ema), Float32(residual_motion_ema),
             Int32(consecutive_above_yield), Int32(consecutive_stable),
-            Float32(yield_up), Float32(settle_down),
-            Int32(k_yield), Int32(k_settle),
-            Float32(epsilon_delta), has_hot_capacity, Int32(tick))
+            Float32(yield_up), Float32(settle_down), Int32(k_yield), Int32(k_settle),
+            Float32(epsilon_delta), melt_budget_available, Int32(tick))
     end
 end
 
-# Default constructor
-Snapshot() = Snapshot(0, 0, false, false, 0.0f0, 0.0f0, 0, 0, 
-                      0.5f0, 0.3f0, 3, 3, 0.1f0, false, 0)
-
-"""
-    create_snapshot(site_index, region_state, site_state, site_telemetry, 
-                    has_hot_capacity, tick) -> Snapshot
-
-Creates an immutable snapshot from current substrate state.
-This is the only way to create snapshots - ensures immutability.
-"""
-function create_snapshot(site_index::Integer, region_state::RegionState,
-                        site_state::SiteState, site_telemetry::SiteTelemetry,
-                        has_hot_capacity::Bool, tick::Integer)::Snapshot
-    return Snapshot(site_index, site_state.q, site_state.allocated,
-                   site_state.superplastic,
-                   site_telemetry.stress_ema, site_telemetry.residual_motion_ema,
-                   site_telemetry.consecutive_above_yield, site_telemetry.consecutive_stable,
-                   region_state.yield_up, region_state.settle_down,
-                   region_state.k_yield, region_state.k_settle,
-                   region_state.epsilon_delta,
-                   has_hot_capacity, tick)
+function create_snapshot(site_index::Integer, region::RegionState,
+                         site::SiteState, telemetry::SiteTelemetry,
+                         melt_budget_available::Bool, tick::Integer)::Snapshot
+    return Snapshot(site_index, site.q, site.allocated, site.superplastic,
+        telemetry.stress_ema, telemetry.residual_motion_ema,
+        telemetry.consecutive_above_yield, telemetry.consecutive_stable,
+        region.yield_up, region.settle_down, region.k_yield, region.k_settle,
+        region.epsilon_delta, melt_budget_available, tick)
 end

@@ -1,181 +1,148 @@
 """
-    Stage0MLP
+    Stage0MLP(input_size, hidden_size, output_size; feature_size=input_size, rng_seed=42)
 
-A deterministic Stage-0 MLP following the frozen architecture:
+Deterministic Stage-0 reference network:
 
-    x → E_fixed → W_material → tanh → H_FP32 → y
+    x -> E_fixed -> W_material -> tanh -> H_FP32 -> y
 
-Where:
-- E_fixed: FP32, nonzero deterministic, frozen
-- W_material: constructed from site exposures (not stored as trainable weights)
-- Activation: tanh ONLY
-- H_FP32: FP32, nonzero deterministic, trainable
-- Output bias: trainable
-
-No Flux/Zygote/GPU. Explicit MSE forward/backward.
+`E_fixed` is a frozen nonzero FP32 projection. `W_material` is never stored as
+an FP32 trainable parameter: it is reconstructed from a tick's material
+exposure snapshot. `H_FP32` and `output_bias` are the trainable conventional
+head.
 """
 struct Stage0MLP
-    E_fixed::Matrix{Float32}      # hidden_size × input_size, frozen
-    H_FP32::Matrix{Float32}       # output_size × hidden_size, trainable
-    output_bias::Vector{Float32}  # output_size, trainable
+    E_fixed::Matrix{Float32}      # feature_size × input_size (frozen)
+    H_FP32::Matrix{Float32}       # output_size × hidden_size (trainable)
+    output_bias::Vector{Float32}  # output_size (trainable)
     input_size::Int32
+    feature_size::Int32
     hidden_size::Int32
     output_size::Int32
-    
+
     function Stage0MLP(input_size::Integer, hidden_size::Integer, output_size::Integer;
-                       rng_seed::UInt32=42)
-        if input_size <= 0 || hidden_size <= 0 || output_size <= 0
-            error("HardFailure: MLP dimensions must be positive")
-        end
-        
+                       feature_size::Integer=input_size, rng_seed::Integer=42)
+        input_size > 0 || error("HardFailure: input_size must be positive")
+        feature_size > 0 || error("HardFailure: feature_size must be positive")
+        hidden_size > 0 || error("HardFailure: hidden_size must be positive")
+        output_size > 0 || error("HardFailure: output_size must be positive")
+
         rng = Xoshiro(rng_seed)
-        
-        # E_fixed: nonzero deterministic initialization, frozen
-        E_fixed = randn(rng, Float32, hidden_size, input_size) .* sqrt(2.0f0 / input_size)
-        # Ensure nonzero
+        e_scale = sqrt(2.0f0 / Float32(input_size))
+        h_scale = sqrt(2.0f0 / Float32(hidden_size))
+        E_fixed = randn(rng, Float32, feature_size, input_size) .* e_scale
+        H_FP32 = randn(rng, Float32, output_size, hidden_size) .* h_scale
+
+        # Exact zeros are extraordinarily unlikely, but the architectural gate
+        # is explicit: the fixed projection and head are nonzero at seed.
         for i in eachindex(E_fixed)
-            if E_fixed[i] == 0.0f0
-                E_fixed[i] = 1.0f-6
-            end
+            E_fixed[i] == 0.0f0 && (E_fixed[i] = eps(Float32))
         end
-        
-        # H_FP32: nonzero deterministic initialization, trainable
-        H_FP32 = randn(rng, Float32, output_size, hidden_size) .* sqrt(2.0f0 / hidden_size)
         for i in eachindex(H_FP32)
-            if H_FP32[i] == 0.0f0
-                H_FP32[i] = 1.0f-6
-            end
+            H_FP32[i] == 0.0f0 && (H_FP32[i] = eps(Float32))
         end
-        
-        # Output bias: trainable
-        output_bias = zeros(Float32, output_size)
-        
-        new(Float32.(E_fixed), Float32.(H_FP32), Float32.(output_bias),
-            Int32(input_size), Int32(hidden_size), Int32(output_size))
+
+        bias = zeros(Float32, output_size)
+        new(E_fixed, H_FP32, bias, Int32(input_size), Int32(feature_size),
+            Int32(hidden_size), Int32(output_size))
     end
 end
 
-"""
-    build_W_material(mlp::Stage0MLP, exposures::Vector{Float32}) -> Matrix{Float32}
+num_material_sites(mlp::Stage0MLP)::Int = Int(mlp.hidden_size) * Int(mlp.feature_size)
 
-Constructs W_material from site exposures.
-Number of material sites = hidden_size * feature_size.
-exposures must have length = hidden_size * input_size.
-"""
-function build_W_material(mlp::Stage0MLP, exposures::Vector{Float32})::Matrix{Float32}
-    expected_len = mlp.hidden_size * mlp.input_size
-    if length(exposures) != expected_len
-        error("HardFailure: exposures length $(length(exposures)) != expected $expected_len")
-    end
-    # Reshape exposures into hidden_size × input_size matrix
-    return reshape(exposures, mlp.hidden_size, mlp.input_size)
+function material_exposures(sites::AbstractVector{SiteState},
+                            policy::ExposurePolicy)::Vector{Float32}
+    return Float32.(exposure_snapshot(sites, policy))
+end
+
+function build_W_material(mlp::Stage0MLP,
+                          exposures::AbstractVector{<:Real})
+    expected = num_material_sites(mlp)
+    length(exposures) == expected ||
+        error("HardFailure: exposure count $(length(exposures)) != material-site count $expected")
+    # Julia's column-major reshape is the canonical logical site order for the
+    # Stage-0 reference path; backward uses the same order via `vec`.
+    return reshape(Float32.(exposures), Int(mlp.hidden_size), Int(mlp.feature_size))
 end
 
 """
-    forward(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32}) -> (y, hidden_pre, hidden_post)
+    forward(mlp, X, exposures)
 
-Performs forward pass: x → E_fixed → W_material → tanh → H_FP32 → y
-
-Returns:
-- y: output vector
-- hidden_pre: pre-tanh activations (W_material * (E_fixed * x))
-- hidden_post: post-tanh activations
-
-Deterministic: same input always produces same output.
+`X` is `input_size × batch`. Returns a named tuple containing the output and
+intermediates required by the explicit reference backward pass.
 """
-function forward(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32})
-    if length(x) != mlp.input_size
-        error("HardFailure: input size $(length(x)) != expected $(mlp.input_size)")
-    end
-    
-    # Step 1: E_fixed * x (fixed feature transformation)
-    e_fixed_x = mlp.E_fixed * x  # hidden_size vector
-    
-    # Step 2: Build W_material from exposures and apply
-    W_mat = build_W_material(mlp, exposures)
-    hidden_pre = W_mat * e_fixed_x  # hidden_size vector
-    
-    # Step 3: tanh activation
-    hidden_post = tanh.(hidden_pre)
-    
-    # Step 4: H_FP32 * hidden_post + output_bias
-    y = mlp.H_FP32 * hidden_post .+ mlp.output_bias
-    
-    return y, hidden_pre, hidden_post
+function forward(mlp::Stage0MLP, X::AbstractMatrix{<:Real},
+                 exposures::AbstractVector{<:Real})
+    size(X, 1) == Int(mlp.input_size) ||
+        error("HardFailure: input first dimension $(size(X,1)) != $(mlp.input_size)")
+    Xf = Float32.(X)
+    features = mlp.E_fixed * Xf
+    W_material = build_W_material(mlp, exposures)
+    preactivation = W_material * features
+    hidden = tanh.(preactivation)
+    y = mlp.H_FP32 * hidden .+ reshape(mlp.output_bias, Int(mlp.output_size), 1)
+    return (y=y, features=features, preactivation=preactivation,
+            hidden=hidden, W_material=W_material)
+end
+
+function forward(mlp::Stage0MLP, x::AbstractVector{<:Real},
+                 exposures::AbstractVector{<:Real})
+    f = forward(mlp, reshape(Float32.(x), length(x), 1), exposures)
+    return (y=vec(f.y), features=vec(f.features),
+            preactivation=vec(f.preactivation), hidden=vec(f.hidden),
+            W_material=f.W_material)
 end
 
 """
-    backward_mse(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32}, 
-                 target::Vector{Float32}) -> (loss, grad_material, grad_e_fixed_x, grad_H, grad_bias)
+    backward_mse(mlp, X, exposures, target)
 
-Explicit MSE backward pass returning:
-- loss: MSE loss
-- grad_material: gradient wrt material coefficients (exposures)
-- grad_e_fixed_x: gradient wrt fixed feature vector e = E_fixed * x
-- grad_H: gradient wrt H_FP32
-- grad_bias: gradient wrt output bias
+Explicit CPU reference backward for the canonical Stage-0 loss convention:
 
-No AD framework. Pure explicit Julia math.
+    L = 1/2 * mean((y - target)^2)
+
+The mean is over every output element in the batch. No AD framework is used.
 """
-function backward_mse(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32},
-                      target::Vector{Float32})
-    # Forward pass
-    y, hidden_pre, hidden_post = forward(mlp, x, exposures)
-    
-    # MSE loss: L = 0.5 * ||y - target||^2
-    diff = y .- target
-    loss = 0.5f0 * sum(diff .^ 2)
-    
-    # Gradient wrt y
-    grad_y = diff  # dL/dy = y - target
-    
-    # Gradient wrt H_FP32: dL/dH = grad_y * hidden_post'
-    grad_H = grad_y * hidden_post'  # output_size × hidden_size
-    
-    # Gradient wrt output_bias
-    grad_bias = copy(grad_y)
-    
-    # Gradient wrt hidden_post: dL/dhidden_post = H_FP32' * grad_y
-    grad_hidden_post = mlp.H_FP32' * grad_y
-    
-    # Gradient through tanh: dL/dhidden_pre = grad_hidden_post .* (1 - hidden_post.^2)
-    grad_hidden_pre = grad_hidden_post .* (1.0f0 .- hidden_post .^ 2)
-    
-    # Gradient wrt W_material: dL/dW = grad_hidden_pre * e_fixed_x'
-    e_fixed_x = mlp.E_fixed * x
-    grad_W_mat = grad_hidden_pre * e_fixed_x'  # hidden_size × input_size
-    
-    # Gradient wrt material coefficients (exposures):
-    # Since W_mat[i,j] = exposures[(i-1)*input_size + j], gradient flows directly
-    grad_material = vec(grad_W_mat)
-    
-    # Gradient wrt e_fixed_x: dL/de_fixed_x = W_mat' * grad_hidden_pre
-    W_mat = build_W_material(mlp, exposures)
-    grad_e_fixed_x = W_mat' * grad_hidden_pre
-    
-    return loss, grad_material, grad_e_fixed_x, grad_H, grad_bias
+function backward_mse(mlp::Stage0MLP, X::AbstractMatrix{<:Real},
+                      exposures::AbstractVector{<:Real},
+                      target::AbstractMatrix{<:Real})
+    size(target, 1) == Int(mlp.output_size) ||
+        error("HardFailure: target first dimension mismatch")
+    size(target, 2) == size(X, 2) || error("HardFailure: target batch mismatch")
+
+    f = forward(mlp, X, exposures)
+    target_f = Float32.(target)
+    diff = f.y .- target_f
+    normalization = Float32(length(diff))
+    loss = 0.5f0 * sum(abs2, diff) / normalization
+
+    grad_y = diff ./ normalization
+    grad_H = grad_y * f.hidden'
+    grad_bias = vec(sum(grad_y; dims=2))
+    grad_hidden = mlp.H_FP32' * grad_y
+    grad_preactivation = grad_hidden .* (1.0f0 .- f.hidden .^ 2)
+    grad_W_material = grad_preactivation * f.features'
+    grad_material = vec(grad_W_material)
+    grad_features = f.W_material' * grad_preactivation
+
+    return (loss=loss,
+            grad_material=grad_material,
+            grad_features=grad_features,
+            grad_H=grad_H,
+            grad_bias=grad_bias,
+            forward=f)
 end
 
-"""
-    get_trainable_params(mlp::Stage0MLP) -> Vector{Float32}
-
-Returns all trainable parameters (H_FP32 and output_bias) as a flat vector.
-E_fixed is frozen and not included.
-"""
-function get_trainable_params(mlp::Stage0MLP)::Vector{Float32}
-    return vcat(vec(mlp.H_FP32), mlp.output_bias)
-end
-
-"""
-    set_trainable_params!(mlp::Stage0MLP, params::Vector{Float32})
-
-Sets trainable parameters from a flat vector.
-"""
-function set_trainable_params!(mlp::Stage0MLP, params::Vector{Float32})
-    h_size = mlp.output_size * mlp.hidden_size
-    if length(params) != h_size + mlp.output_size
-        error("HardFailure: param vector length mismatch")
-    end
-    mlp.H_FP32 .= reshape(params[1:h_size], mlp.output_size, mlp.hidden_size)
-    mlp.output_bias .= params[h_size+1:end]
+function backward_mse(mlp::Stage0MLP, x::AbstractVector{<:Real},
+                      exposures::AbstractVector{<:Real},
+                      target::AbstractVector{<:Real})
+    b = backward_mse(mlp, reshape(Float32.(x), length(x), 1), exposures,
+                     reshape(Float32.(target), length(target), 1))
+    return (loss=b.loss,
+            grad_material=b.grad_material,
+            grad_features=vec(b.grad_features),
+            grad_H=b.grad_H,
+            grad_bias=b.grad_bias,
+            forward=(y=vec(b.forward.y), features=vec(b.forward.features),
+                     preactivation=vec(b.forward.preactivation),
+                     hidden=vec(b.forward.hidden),
+                     W_material=b.forward.W_material))
 end

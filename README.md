@@ -1,145 +1,74 @@
-# PlasticWeights.jl — Stage-0 Implementation
+# PlasticWeights.jl — Stage-0 reference kernel
 
-A reference implementation of the PlasticWeights substrate following the Stage-0 Implementation Contract v0.1.0.
+This repository is implementing the **frozen PlasticWeights v0.1.0 Stage-0 specification**. The current milestone is deliberately narrow: a deterministic CPU reference kernel and the causal sanity suite through S3b.
 
-## Overview
+## Implemented in this pass
 
-PlasticWeights is a substrate for studying history-dependent credit assignment through material dynamics. This Stage-0 implementation provides:
+- Parameter-site state: ternary `q`, allocation, superplastic flag, hot handle.
+- Deterministic FP32 hot pool with one residual per superplastic site.
+- Fixed contiguous Stage-0 regions (64–256 sites) with persistent yield/settle/viscosity/hardening state.
+- ZCS and VPS exposure semantics.
+- Exact ternary reconsolidation quantizer (`±0.5 -> 0`).
+- Newtonian calibration law and Bingham-inspired constitutive law.
+- Immutable typed DCP snapshots and stateless fixed-rule controller.
+- Atomic MELT/COMMIT transitions with mandatory work-hardening.
+- Normative all-superplastic Stage-0 seed initializer.
+- Stage-0 network:
 
-- **Hot/cold site storage** with deterministic allocation
-- **Exposure policies** (ZCS/VPS) for variant-specific forward semantics
-- **Constitutive laws** (Newtonian, Bingham-inspired) for material response
-- **Decision-making Control Processes (DCP)** for lifecycle transitions
-- **Deterministic reference execution mode** for causal testing
+  `x -> E_fixed -> W_material -> tanh -> H_FP32 -> y`
 
-## Module Structure
+  `W_material` is built only from material-site exposures; the reference backward pass is explicit Julia code with no AD framework.
+- Injected-gradient deterministic material tick used for causal mechanism tests.
+- Tests S0, S1, S1b, S2, S3, and S3b.
 
-```
-PlasticWeights
-├── Core
-│   ├── SiteState        # Ternary site storage (-1, 0, +1)
-│   ├── RegionState      # Strict region partitioning
-│   ├── HotPool          # FP32 residual management
-│   └── Exposure         # ZCS/VPS exposure policies
-├── Constitutive
-│   ├── Newtonian        # Linear viscous response
-│   └── BinghamInspired  # Yield-threshold plastic flow
-├── DCP
-│   ├── Snapshot         # Immutable state snapshots
-│   ├── Actions          # Lifecycle transition actions
-│   └── FixedRuleController  # Rule-based decisions
-├── Models
-│   └── Stage0MLP        # Deterministic MLP
-├── Tasks
-│   └── SyntheticConflictFamily  # Test task family
-├── Telemetry
-│   ├── Events           # Substrate events
-│   ├── Metrics          # Performance metrics
-│   └── TraceWriter      # Trace logging
-├── Controls
-│   ├── C1_Adam          # Adam optimizer
-│   ├── C2_SGD           # SGD optimizer
-│   ├── C3_ShadowAdam    # Shadow dynamics
-│   ├── C4_AdaptiveScalar # Adaptive hyperparameters
-│   ├── C5_Newtonian     # Newtonian control
-│   ├── C6_FixedSchedule # Fixed schedules
-│   ├── C7_HistoryReset  # History resets
-│   └── C8_PerSiteThreshold # Per-site thresholds
-└── Tests
-    ├── Sanity           # Basic correctness tests
-    ├── Causal           # Determinism tests
-    └── Invariants       # Hard failure gate tests
-```
+## Not implemented yet
 
-## Key Contracts
+The following exist only as future/deferred source scaffolding where present and are **not loaded by `PlasticWeights`**:
 
-### Site State
-- `q::Int8` - ternary state in {-1, 0, +1}
-- `allocated::Bool` - allocation status
-- `superplastic::Bool` - plasticity state
-- `hot_handle::Int32` - hot pool handle (0 = invalid)
+- C1–C8 control arms,
+- synthetic conflict task family and long-run A/B harness,
+- S3c and S4–S10,
+- branch-at-remelt experiment,
+- full developmental event telemetry (`first_delta_tick`, `wake_tick`, `credit_unlock_tick`, etc.),
+- Pareto/frontier analysis,
+- optimized kernels/GPU execution.
 
-### Hot Pool
-- One FP32 residual per superplastic site
-- Handle 0 reserved as invalid sentinel
-- Deterministic free-list behavior
-- Commit releases exactly once, melt allocates exactly once
+No claim is made that those components work yet.
 
-### Tick Order (Normative)
-1. Snapshot exposure
-2. Forward pass
-3. Loss computation
-4. Backward pass
-5. Compute coefficient gradients
-6. Update stress EMA
-7. Compute constitutive response
-8. Integrate residuals
-9. Update residual-motion telemetry
-10. Create immutable DCP snapshots
-11. Emit DCP actions
-12. Apply transitions atomically
-13. Apply hardening
-14. Allocate/release hot slots
-15. Log telemetry
-16. Next tick
+## Scientific boundaries
 
-## Usage
+The implementation keeps these boundaries explicit:
 
-```julia
-using PlasticWeights
-
-# Create sites and hot pool
-sites = [SiteState(0) for _ in 1:64]
-pool = HotPool(32)
-region_map = RegionMap(64, 8)
-
-# Run sanity tests
-run_sanity_tests()
-
-# Run causal tests  
-run_causal_tests()
-
-# Run invariant tests
-run_invariant_tests()
+```text
+exposure snapshot
+    -> network forward/backward
+    -> coefficient gradients
+    -> stress telemetry
+    -> constitutive response
+    -> hot residual integration
+    -> residual-motion telemetry
+    -> immutable DCP snapshot
+    -> DCP action
+    -> atomic lifecycle transition
+    -> next-tick exposure
 ```
 
-## Reference Mode
+The constitutive law cannot melt, commit, allocate, release, or mutate exposure. The DCP cannot read undeclared mutable globals or raw latent residuals. `HotPool` is the only source of truth for `delta`.
 
-All causal/sanity tests use:
-- CPU execution
-- Single-threaded where required
-- Deterministic iteration order
-- Deterministic RNG (Xoshiro)
-- No unordered hash-map iteration in state transition paths
+## Running the reference suite
 
-S3b requires bitwise identity across runs.
+```bash
+./scripts/test_reference.sh
+```
 
-## Hard Failure Gates
+Equivalent explicit command:
 
-The implementation aborts if:
-- Site q leaves {-1, 0, +1}
-- Superplastic site lacks valid hot handle
-- Non-superplastic site owns hot handle
-- Region partition invalid
-- Budget exceeded
-- DCP snapshot contains undeclared mutable reference
-- Exposure changes mid-tick
-- S2 seed learnability fails
-- Deterministic reference invariants fail
+```bash
+JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+```
 
-## Build Order
+This archive was edited in an environment without a Julia runtime, so the current pass is **statically audited but execution-unverified**. The first local `Pkg.test()` result is the next source of truth.
 
-Implementation follows the recommended sequence:
-1. Core site/region state ✓
-2. Hot pool ✓
-3. Exposure policies ✓
-4. Constitutive laws ✓
-5. Stage-0 MLP ✓
-6. DCP ✓
-7. Controls ✓
-8. Telemetry ✓
-9. Tests ✓
+## Frozen specification
 
-## License
-
-Stage-0 Implementation Contract v0.1.0
+The normative research specification is vendored unchanged under `spec/v0.1.0/`. Changes to the scientific semantics should follow the freeze rule rather than being silently introduced as implementation conveniences.

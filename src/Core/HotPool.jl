@@ -1,178 +1,84 @@
 """
-    HotPool
+    HotPool(capacity)
 
-Manages FP32 residuals for superplastic sites.
-
-Contract:
-- one FP32 residual per superplastic site
-- handle 0 reserved as invalid sentinel (handles are 1:capacity)
-- no consolidated/vacant site owns a hot slot
-- commit releases exactly once
-- melt allocates exactly once
-- deterministic free-list behavior in reference mode
+Deterministic FP32 residual storage for superplastic sites. Handles are
+`1:capacity`; handle 0 is an invalid sentinel used only by cold sites.
 """
 mutable struct HotPool
-    residuals::Vector{Float32}      # FP32 residuals at indices 1:capacity
-    free_list::Vector{Int32}        # available handles (deterministic order)
-    allocated::BitVector            # track which slots are allocated at indices 1:capacity
+    residuals::Vector{Float32}
+    free_list::Vector{Int32}
+    allocated::BitVector
     capacity::Int32
-    
+
     function HotPool(capacity::Integer)
-        if capacity <= 0
-            error("HardFailure: HotPool capacity must be positive, got $capacity")
-        end
-        
-        # Handles are 1:capacity (handle 0 is invalid sentinel only)
-        # Index h in arrays corresponds to handle h
+        capacity > 0 || error("HardFailure: HotPool capacity must be positive, got $capacity")
         residuals = zeros(Float32, capacity)
-        free_list = collect(Int32, capacity:-1:1)  # deterministic: highest first
-        allocated = BitVector(undef, capacity)
-        fill!(allocated, false)
-        
+        # `pop!` therefore yields 1,2,3,... on a fresh pool. Released handles are
+        # reused LIFO. Both behaviours are deterministic.
+        free_list = Int32.(collect(capacity:-1:1))
+        allocated = falses(capacity)
         new(residuals, free_list, allocated, Int32(capacity))
     end
 end
 
-# Get the number of allocated slots
-num_allocated(pool::HotPool)::Int = count(==(true), pool.allocated)
+num_allocated(pool::HotPool)::Int = count(identity, pool.allocated)
+available_count(pool::HotPool)::Int = length(pool.free_list)
+has_capacity(pool::HotPool)::Bool = !isempty(pool.free_list)
 
-# Check if a handle is valid and allocated
 function is_valid_handle(pool::HotPool, handle::Integer)::Bool
-    handle_int = Int32(handle)
-    return handle_int >= 1 && handle_int <= pool.capacity && pool.allocated[handle_int]
+    h = Int(handle)
+    return 1 <= h <= Int(pool.capacity) && pool.allocated[h]
 end
 
-"""
-    allocate!(pool::HotPool) -> Int32
-
-Allocates a hot slot and returns its handle.
-Handle 0 is reserved as invalid sentinel.
-Deterministic free-list behavior in reference mode.
-"""
-function allocate!(pool::HotPool)::Int32
-    if isempty(pool.free_list)
-        error("HardFailure: HotPool exhausted, no free handles available")
-    end
-    
-    # Pop from free list (deterministic: always use highest available)
+function allocate!(pool::HotPool, initial_residual::Real=0.0f0)::Int32
+    isempty(pool.free_list) && error("HardFailure: HotPool exhausted")
     handle = pop!(pool.free_list)
-    
-    if pool.allocated[handle]
-        error("HardFailure: attempted to allocate already-allocated handle $handle")
-    end
-    
-    pool.allocated[handle] = true
-    pool.residuals[handle] = 0.0f0  # initialize to zero
-    
+    h = Int(handle)
+    pool.allocated[h] && error("HardFailure: attempted double allocation of handle $handle")
+    pool.allocated[h] = true
+    pool.residuals[h] = Float32(initial_residual)
     return handle
 end
 
-"""
-    release!(pool::HotPool, handle::Int32)
-
-Releases a hot slot back to the free list.
-Must be called exactly once per allocation (commit releases exactly once).
-"""
-function release!(pool::HotPool, handle::Int32)
-    if handle < 1 || handle > pool.capacity
-        error("HardFailure: invalid handle $handle for release (must be 1:$(pool.capacity))")
-    end
-    
-    if !pool.allocated[handle]
-        error("HardFailure: attempted to release non-allocated handle $handle")
-    end
-    
-    pool.allocated[handle] = false
-    pool.residuals[handle] = 0.0f0
-    
-    # Push back to free list (deterministic order)
-    push!(pool.free_list, handle)
+function release!(pool::HotPool, handle::Integer)
+    h = Int(handle)
+    1 <= h <= Int(pool.capacity) || error("HardFailure: invalid handle $handle for release")
+    pool.allocated[h] || error("HardFailure: attempted to release non-allocated handle $handle")
+    pool.allocated[h] = false
+    pool.residuals[h] = 0.0f0
+    push!(pool.free_list, Int32(h))
+    return nothing
 end
 
-"""
-    get_residual(pool::HotPool, handle::Int32) -> Float32
-
-Gets the residual value for a given handle.
-"""
-function get_residual(pool::HotPool, handle::Int32)::Float32
-    if handle < 1 || handle > pool.capacity
-        error("HardFailure: invalid handle $handle for get_residual")
-    end
-    
-    if !pool.allocated[handle]
-        error("HardFailure: attempted to get residual from non-allocated handle $handle")
-    end
-    
-    return pool.residuals[handle]
+function get_residual(pool::HotPool, handle::Integer)::Float32
+    is_valid_handle(pool, handle) || error("HardFailure: invalid/unallocated handle $handle")
+    return pool.residuals[Int(handle)]
 end
 
-"""
-    set_residual!(pool::HotPool, handle::Int32, value::Float32)
-
-Sets the residual value for a given handle.
-"""
-function set_residual!(pool::HotPool, handle::Int32, value::Float32)
-    if handle < 1 || handle > pool.capacity
-        error("HardFailure: invalid handle $handle for set_residual!")
-    end
-    
-    if !pool.allocated[handle]
-        error("HardFailure: attempted to set residual on non-allocated handle $handle")
-    end
-    
-    pool.residuals[handle] = value
+function set_residual!(pool::HotPool, handle::Integer, value::Real)
+    is_valid_handle(pool, handle) || error("HardFailure: invalid/unallocated handle $handle")
+    pool.residuals[Int(handle)] = Float32(value)
+    return nothing
 end
 
-"""
-    check_invariants(pool::HotPool)
+function integrate_residual!(pool::HotPool, handle::Integer, delta_delta::Real)::Float32
+    new_value = get_residual(pool, handle) + Float32(delta_delta)
+    set_residual!(pool, handle, new_value)
+    return new_value
+end
 
-Validates hot pool invariants:
-- handle 0 is never used (handles are 1:capacity)
-- allocated count + free list length = capacity
-- no handle is both in free list and allocated
-- no double allocation or double release possible
-"""
 function check_invariants(pool::HotPool)
-    # Check free list + allocated = capacity
-    num_free = length(pool.free_list)
-    num_alloc = count(==(true), pool.allocated)
-    
-    if num_free + num_alloc != pool.capacity
-        error("HardFailure: HotPool invariant violated: free($num_free) + allocated($num_alloc) != capacity($(pool.capacity))")
-    end
-    
-    # Check all free handles are not allocated
+    cap = Int(pool.capacity)
+    length(pool.residuals) == cap || error("HardFailure: residual array/capacity mismatch")
+    length(pool.allocated) == cap || error("HardFailure: allocation array/capacity mismatch")
+    available_count(pool) + num_allocated(pool) == cap ||
+        error("HardFailure: free + allocated != capacity")
+    length(unique(pool.free_list)) == length(pool.free_list) ||
+        error("HardFailure: duplicate handle in free_list")
     for handle in pool.free_list
-        if pool.allocated[handle]
-            error("HardFailure: handle $handle in free_list but marked as allocated")
-        end
+        h = Int(handle)
+        1 <= h <= cap || error("HardFailure: free handle $handle out of range")
+        !pool.allocated[h] || error("HardFailure: handle $handle is both free and allocated")
     end
-    
-    # Check no duplicates in free list
-    if length(unique(pool.free_list)) != length(pool.free_list)
-        error("HardFailure: duplicate handles in free_list")
-    end
-    
-    # Check all handles in free list are in valid range [1, capacity]
-    for handle in pool.free_list
-        if handle < 1 || handle > pool.capacity
-            error("HardFailure: handle $handle in free_list out of range [1, $(pool.capacity)]")
-        end
-    end
-    
     return true
 end
-
-"""
-    has_capacity(pool::HotPool) -> Bool
-
-Returns true if the pool has at least one free handle.
-"""
-has_capacity(pool::HotPool)::Bool = !isempty(pool.free_list)
-
-"""
-    available_count(pool::HotPool) -> Int
-
-Returns the number of available (free) handles.
-"""
-available_count(pool::HotPool)::Int = length(pool.free_list)

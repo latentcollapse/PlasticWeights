@@ -1,81 +1,56 @@
 """
     PlasticWeights
 
-Stage-0 Implementation of the PlasticWeights substrate.
-
-A reference implementation following the Stage-0 Implementation Contract v0.1.0:
-- Hot/cold site storage with deterministic allocation
-- Exposure policies (ZCS/VPS) for variant-specific forward semantics
-- Constitutive laws (Newtonian, Bingham-inspired) for material response
-- Decision-making Control Processes (DCP) for lifecycle transitions
-- Deterministic reference execution mode for causal testing
+Deterministic Stage-0 reference kernel for the frozen PlasticWeights v0.1.0
+specification. This package surface intentionally stops at the causal reference
+kernel (S0/S1/S1b/S2/S3/S3b); long-run tasks, controls, and experiment
+telemetry are not loaded yet.
 """
 module PlasticWeights
 
-# Standard library imports
 using Random
-using Statistics
 
-# ============================================================================
-# Core exports
-# ============================================================================
-export SiteState, RegionState, RegionMap, HotPool
-export ZCS, VPS, exposure
-export SiteTelemetry
+# Core
+export SiteState, SiteTelemetry, RegionState, RegionMap, HotPool, SubstrateState
+export check_invariants, get_region_id, get_region, get_region_for_site
+export allocate!, release!, get_residual, set_residual!, integrate_residual!
+export num_allocated, available_count, has_capacity, is_valid_handle
+export update_stress_ema!, update_residual_motion_ema!, update_counters!, reset_lifecycle_counters!
+export ternary_round
+export ExposurePolicy, ZCS, VPS, exposure, exposure_snapshot
+export initialize_stage0_seed, initialize_consolidated_substrate
 
-# ============================================================================
-# Constitutive exports
-# ============================================================================
-export ConstitutiveLaw, response
-export Newtonian, NEWTONIAN
+# Constitutive laws
+export ConstitutiveLaw, response, Newtonian, NEWTONIAN
 export BinghamInspired, BINGHAM_INSPIRED
 
-# ============================================================================
-# DCP exports
-# ============================================================================
-export DCP, Snapshot, Action
-export decide, apply_action!
-export FixedRuleController, MeltAction, CommitAction, NoAction
+# DCP
+export DCP, Snapshot, Action, NoAction, MeltAction, CommitAction
+export FixedRuleController, FIXED_RULE_CONTROLLER
+export create_snapshot, decide, apply_action!, action_code
 
-# ============================================================================
-# Model exports
-# ============================================================================
-export Stage0MLP
+# Model/reference path
+export Stage0MLP, num_material_sites, material_exposures, build_W_material
+export forward, backward_mse, reference_material_tick!
 
-# ============================================================================
-# Telemetry exports
-# ============================================================================
-export Event, Metric, TraceWriter
-
-# ============================================================================
-# Include submodules in dependency order
-# ============================================================================
-
-# Core types (no dependencies)
 include("Core/SiteState.jl")
 include("Core/SiteTelemetry.jl")
 include("Core/RegionState.jl")
 include("Core/HotPool.jl")
+include("Core/Quantizer.jl")
 include("Core/Exposure.jl")
+include("Core/Initialization.jl")
 
-# Constitutive laws (depend on RegionState, SiteTelemetry)
 include("Constitutive/Law.jl")
 include("Constitutive/Newtonian.jl")
 include("Constitutive/BinghamInspired.jl")
 
-# DCP (depends on Core, Telemetry)
 include("DCP/DCP.jl")
 include("DCP/Snapshot.jl")
 include("DCP/Actions.jl")
 include("DCP/FixedRuleController.jl")
 
-# Models (standalone)
 include("Models/Stage0MLP.jl")
-
-# Telemetry
-include("Telemetry/Events.jl")
-include("Telemetry/Metrics.jl")
-include("Telemetry/TraceWriter.jl")
-include("Telemetry/Telemetry.jl")
+include("Reference/ReferenceKernel.jl")
 
 end # module PlasticWeights
