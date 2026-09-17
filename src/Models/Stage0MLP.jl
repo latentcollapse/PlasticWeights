@@ -1,106 +1,181 @@
 """
     Stage0MLP
 
-A deterministic Stage-0 MLP (Multi-Layer Perceptron) for the reference implementation.
+A deterministic Stage-0 MLP following the frozen architecture:
 
-Follows the build order requirement:
-- Deterministic in reference mode
-- CPU, single-threaded execution
-- Deterministic iteration order
-- Deterministic RNG
+    x → E_fixed → W_material → tanh → H_FP32 → y
 
-This is a simple prototype - not optimized for performance.
+Where:
+- E_fixed: FP32, nonzero deterministic, frozen
+- W_material: constructed from site exposures (not stored as trainable weights)
+- Activation: tanh ONLY
+- H_FP32: FP32, nonzero deterministic, trainable
+- Output bias: trainable
+
+No Flux/Zygote/GPU. Explicit MSE forward/backward.
 """
 struct Stage0MLP
-    weights::Vector{Float32}
-    biases::Vector{Float32}
+    E_fixed::Matrix{Float32}      # hidden_size × input_size, frozen
+    H_FP32::Matrix{Float32}       # output_size × hidden_size, trainable
+    output_bias::Vector{Float32}  # output_size, trainable
     input_size::Int32
     hidden_size::Int32
     output_size::Int32
     
-    function Stage0MLP(input_size::Integer, hidden_size::Integer, output_size::Integer; 
+    function Stage0MLP(input_size::Integer, hidden_size::Integer, output_size::Integer;
                        rng_seed::UInt32=42)
         if input_size <= 0 || hidden_size <= 0 || output_size <= 0
             error("HardFailure: MLP dimensions must be positive")
         end
         
-        # Deterministic initialization with fixed seed
         rng = Xoshiro(rng_seed)
         
-        # Xavier/Glorot initialization
-        total_params = (input_size * hidden_size + hidden_size * output_size + 
-                       hidden_size + output_size)
-        weights = randn(rng, Float32, total_params) .* sqrt(2.0f0 / (input_size + output_size))
-        biases = zeros(Float32, hidden_size + output_size)
+        # E_fixed: nonzero deterministic initialization, frozen
+        E_fixed = randn(rng, Float32, hidden_size, input_size) .* sqrt(2.0f0 / input_size)
+        # Ensure nonzero
+        for i in eachindex(E_fixed)
+            if E_fixed[i] == 0.0f0
+                E_fixed[i] = 1.0f-6
+            end
+        end
         
-        new(Int32(input_size), Int32(hidden_size), Int32(output_size), weights, biases)
+        # H_FP32: nonzero deterministic initialization, trainable
+        H_FP32 = randn(rng, Float32, output_size, hidden_size) .* sqrt(2.0f0 / hidden_size)
+        for i in eachindex(H_FP32)
+            if H_FP32[i] == 0.0f0
+                H_FP32[i] = 1.0f-6
+            end
+        end
+        
+        # Output bias: trainable
+        output_bias = zeros(Float32, output_size)
+        
+        new(Float32.(E_fixed), Float32.(H_FP32), Float32.(output_bias),
+            Int32(input_size), Int32(hidden_size), Int32(output_size))
     end
 end
 
 """
-    forward(mlp::Stage0MLP, input::Vector{Float32}) -> Vector{Float32}
+    build_W_material(mlp::Stage0MLP, exposures::Vector{Float32}) -> Matrix{Float32}
 
-Performs a forward pass through the MLP.
+Constructs W_material from site exposures.
+Number of material sites = hidden_size * feature_size.
+exposures must have length = hidden_size * input_size.
+"""
+function build_W_material(mlp::Stage0MLP, exposures::Vector{Float32})::Matrix{Float32}
+    expected_len = mlp.hidden_size * mlp.input_size
+    if length(exposures) != expected_len
+        error("HardFailure: exposures length $(length(exposures)) != expected $expected_len")
+    end
+    # Reshape exposures into hidden_size × input_size matrix
+    return reshape(exposures, mlp.hidden_size, mlp.input_size)
+end
+
+"""
+    forward(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32}) -> (y, hidden_pre, hidden_post)
+
+Performs forward pass: x → E_fixed → W_material → tanh → H_FP32 → y
+
+Returns:
+- y: output vector
+- hidden_pre: pre-tanh activations (W_material * (E_fixed * x))
+- hidden_post: post-tanh activations
 
 Deterministic: same input always produces same output.
 """
-function forward(mlp::Stage0MLP, input::Vector{Float32})::Vector{Float32}
-    if length(input) != mlp.input_size
-        error("HardFailure: input size $(length(input)) != expected $(mlp.input_size)")
+function forward(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32})
+    if length(x) != mlp.input_size
+        error("HardFailure: input size $(length(x)) != expected $(mlp.input_size)")
     end
     
-    # Hidden layer: ReLU(W1 * x + b1)
-    hidden = zeros(Float32, mlp.hidden_size)
-    for h in 1:mlp.hidden_size
-        sum = mlp.biases[h]
-        for i in 1:mlp.input_size
-            idx = (h - 1) * mlp.input_size + i
-            sum += mlp.weights[idx] * input[i]
-        end
-        hidden[h] = relu(sum)
-    end
+    # Step 1: E_fixed * x (fixed feature transformation)
+    e_fixed_x = mlp.E_fixed * x  # hidden_size vector
     
-    # Output layer: W2 * hidden + b2
-    output = zeros(Float32, mlp.output_size)
-    bias_offset = mlp.hidden_size
-    weight_offset = mlp.input_size * mlp.hidden_size
+    # Step 2: Build W_material from exposures and apply
+    W_mat = build_W_material(mlp, exposures)
+    hidden_pre = W_mat * e_fixed_x  # hidden_size vector
     
-    for o in 1:mlp.output_size
-        sum = mlp.biases[bias_offset + o]
-        for h in 1:mlp.hidden_size
-            idx = weight_offset + (o - 1) * mlp.hidden_size + h
-            sum += mlp.weights[idx] * hidden[h]
-        end
-        output[o] = sum
-    end
+    # Step 3: tanh activation
+    hidden_post = tanh.(hidden_pre)
     
-    return output
-end
-
-# Simple ReLU activation
-relu(x::Real) = x > 0 ? Float32(x) : 0.0f0
-
-"""
-    get_params(mlp::Stage0MLP) -> Vector{Float32}
-
-Returns all parameters (weights and biases) as a flat vector.
-"""
-function get_params(mlp::Stage0MLP)::Vector{Float32}
-    return vcat(mlp.weights, mlp.biases)
+    # Step 4: H_FP32 * hidden_post + output_bias
+    y = mlp.H_FP32 * hidden_post .+ mlp.output_bias
+    
+    return y, hidden_pre, hidden_post
 end
 
 """
-    set_params!(mlp::Stage0MLP, params::Vector{Float32})
+    backward_mse(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32}, 
+                 target::Vector{Float32}) -> (loss, grad_material, grad_e_fixed_x, grad_H, grad_bias)
 
-Sets all parameters from a flat vector.
+Explicit MSE backward pass returning:
+- loss: MSE loss
+- grad_material: gradient wrt material coefficients (exposures)
+- grad_e_fixed_x: gradient wrt fixed feature vector e = E_fixed * x
+- grad_H: gradient wrt H_FP32
+- grad_bias: gradient wrt output bias
+
+No AD framework. Pure explicit Julia math.
 """
-function set_params!(mlp::Stage0MLP, params::Vector{Float32})
-    expected_len = length(mlp.weights) + length(mlp.biases)
-    if length(params) != expected_len
-        error("HardFailure: param vector length $(length(params)) != expected $expected_len")
-    end
+function backward_mse(mlp::Stage0MLP, x::Vector{Float32}, exposures::Vector{Float32},
+                      target::Vector{Float32})
+    # Forward pass
+    y, hidden_pre, hidden_post = forward(mlp, x, exposures)
     
-    n_weights = length(mlp.weights)
-    mlp.weights .= params[1:n_weights]
-    mlp.biases .= params[n_weights+1:end]
+    # MSE loss: L = 0.5 * ||y - target||^2
+    diff = y .- target
+    loss = 0.5f0 * sum(diff .^ 2)
+    
+    # Gradient wrt y
+    grad_y = diff  # dL/dy = y - target
+    
+    # Gradient wrt H_FP32: dL/dH = grad_y * hidden_post'
+    grad_H = grad_y * hidden_post'  # output_size × hidden_size
+    
+    # Gradient wrt output_bias
+    grad_bias = copy(grad_y)
+    
+    # Gradient wrt hidden_post: dL/dhidden_post = H_FP32' * grad_y
+    grad_hidden_post = mlp.H_FP32' * grad_y
+    
+    # Gradient through tanh: dL/dhidden_pre = grad_hidden_post .* (1 - hidden_post.^2)
+    grad_hidden_pre = grad_hidden_post .* (1.0f0 .- hidden_post .^ 2)
+    
+    # Gradient wrt W_material: dL/dW = grad_hidden_pre * e_fixed_x'
+    e_fixed_x = mlp.E_fixed * x
+    grad_W_mat = grad_hidden_pre * e_fixed_x'  # hidden_size × input_size
+    
+    # Gradient wrt material coefficients (exposures):
+    # Since W_mat[i,j] = exposures[(i-1)*input_size + j], gradient flows directly
+    grad_material = vec(grad_W_mat)
+    
+    # Gradient wrt e_fixed_x: dL/de_fixed_x = W_mat' * grad_hidden_pre
+    W_mat = build_W_material(mlp, exposures)
+    grad_e_fixed_x = W_mat' * grad_hidden_pre
+    
+    return loss, grad_material, grad_e_fixed_x, grad_H, grad_bias
+end
+
+"""
+    get_trainable_params(mlp::Stage0MLP) -> Vector{Float32}
+
+Returns all trainable parameters (H_FP32 and output_bias) as a flat vector.
+E_fixed is frozen and not included.
+"""
+function get_trainable_params(mlp::Stage0MLP)::Vector{Float32}
+    return vcat(vec(mlp.H_FP32), mlp.output_bias)
+end
+
+"""
+    set_trainable_params!(mlp::Stage0MLP, params::Vector{Float32})
+
+Sets trainable parameters from a flat vector.
+"""
+function set_trainable_params!(mlp::Stage0MLP, params::Vector{Float32})
+    h_size = mlp.output_size * mlp.hidden_size
+    if length(params) != h_size + mlp.output_size
+        error("HardFailure: param vector length mismatch")
+    end
+    mlp.H_FP32 .= reshape(params[1:h_size], mlp.output_size, mlp.hidden_size)
+    mlp.output_bias .= params[h_size+1:end]
 end

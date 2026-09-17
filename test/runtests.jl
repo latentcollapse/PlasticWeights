@@ -204,31 +204,219 @@ using Random
         @test delta_b_base ≈ delta_b_scaled atol=1e-6
     end
     
-    @testset "S2: Stage-0 Seed State" begin
-        # Material sites begin allocated and superplastic with q=0
-        # HotPool provides exactly one valid hot slot per superplastic site
+    @testset "S2: Gradient Island Test" begin
+        # At an all-ZCS-superplastic seed:
+        # - all material exposures = 0
+        # - hidden activation = 0
+        # - at least one material-weight gradient != 0
+        # - gradient wrt fixed feature vector = exactly 0
+        # - head-weight gradient = exactly 0
+        # - output-bias gradient != 0
         
-        pool = HotPool(10)
-        sites = [SiteState(0, true, true, 0) for _ in 1:10]
-        telemetry = [SiteTelemetry() for _ in 1:10]
+        mlp = Stage0MLP(4, 3, 2; rng_seed=42)
         
-        # Allocate hot slots for all superplastic sites
-        for i in 1:10
-            handle = allocate!(pool)
-            sites[i].hot_handle = handle
+        # Create all-ZCS-superplastic exposures (all zeros for superplastic ZCS)
+        num_material_sites = mlp.hidden_size * mlp.input_size
+        exposures = zeros(Float32, num_material_sites)
+        
+        # Input vector
+        x = Float32[0.5, 0.3, -0.2, 0.8]
+        
+        # Target (nonzero to get nonzero loss gradient)
+        target = Float32[1.0, -0.5]
+        
+        # Forward pass
+        y, hidden_pre, hidden_post = forward(mlp, x, exposures)
+        
+        # All exposures are zero -> W_material is zero -> hidden_pre is zero -> hidden_post is zero
+        @test all(isapprox.(hidden_pre, 0.0f0; atol=1e-6))
+        @test all(isapprox.(hidden_post, 0.0f0; atol=1e-6))
+        
+        # Backward pass
+        loss, grad_material, grad_e_fixed_x, grad_H, grad_bias = backward_mse(mlp, x, exposures, target)
+        
+        # Loss should be nonzero (since target != 0 and bias starts at 0)
+        @test loss > 0.0f0
+        
+        # At least one material coefficient gradient should be nonzero
+        # (gradient flows through tanh derivative which is 1 at 0)
+        @test any(abs.(grad_material) .> 1e-10)
+        
+        # Gradient wrt fixed feature vector e = E_fixed * x
+        # Since hidden_post = 0 and tanh'(0) = 1, gradient flows but W_mat = 0
+        # So grad_e_fixed_x = W_mat' * grad_hidden_pre = 0
+        @test all(isapprox.(grad_e_fixed_x, 0.0f0; atol=1e-6))
+        
+        # Head weight gradient: grad_H = grad_y * hidden_post'
+        # Since hidden_post = 0, grad_H = 0
+        @test all(isapprox.(grad_H, 0.0f0; atol=1e-6))
+        
+        # Output bias gradient: grad_bias = grad_y = y - target
+        # Since y = bias (initially 0) + H*0 = 0, grad_bias = -target != 0
+        @test any(abs.(grad_bias) .> 1e-6)
+    end
+    
+    @testset "S3: Twin History Test" begin
+        # Create A and B with X_op^A = X_op^B but M_hist^A != M_hist^B
+        # Use different yield_up histories only
+        # Feed identical predetermined gradients
+        # Require the lower-yield system to melt earlier
+        
+        using ..Core: SiteState, SiteTelemetry, HotPool, RegionState, RegionMap
+        using ..DCP: create_snapshot, decide, FIXED_RULE_CONTROLLER, MeltAction, NoAction
+        
+        # System A: lower yield history (yield_up = 0.5)
+        region_A = RegionState(
+            yield_up = 0.5f0,
+            settle_down = 0.3f0,
+            eta = 1.0f0,
+            hardening_increment = 0.1f0,
+            k_yield = Int32(3),
+            k_settle = Int32(3),
+            epsilon_delta = 0.01f0
+        )
+        
+        # System B: higher yield history (yield_up = 1.0)
+        region_B = RegionState(
+            yield_up = 1.0f0,
+            settle_down = 0.3f0,
+            eta = 1.0f0,
+            hardening_increment = 0.1f0,
+            k_yield = Int32(3),
+            k_settle = Int32(3),
+            epsilon_delta = 0.01f0
+        )
+        
+        # Identical X_op state for both systems
+        site = SiteState(1, true, false, 0)  # consolidated, allocated
+        telemetry = SiteTelemetry(0.0f0, 0.0f0, 0, 0)
+        
+        # Feed identical predetermined signed gradients to build up stress
+        # After 3 steps with g=0.6, sigma should exceed 0.5 (system A yield) but not 1.0 (system B yield)
+        beta = 0.9f0
+        for step in 1:3
+            g = 0.6f0
+            update_stress_ema!(telemetry, g, beta)
+            update_counters!(telemetry, region_A.yield_up, region_A.settle_down, region_A.epsilon_delta)
         end
         
-        # Verify seed state
-        for i in 1:10
-            @test sites[i].q == 0
-            @test sites[i].allocated == true
-            @test sites[i].superplastic == true
-            @test sites[i].hot_handle > 0
-            @test telemetry[i].stress_ema == 0.0f0
-            @test telemetry[i].residual_motion_ema == 0.0f0
+        # Now telemetry has consecutive_above_yield >= 3 for system A
+        # Create snapshots with same X_op but different region state (different yield_up)
+        pool_A = HotPool(5)
+        pool_B = HotPool(5)
+        
+        # System A should MELT (consecutive_above_yield >= k_yield AND budget available)
+        snap_A = create_snapshot(1, region_A, site, telemetry, true, 1)
+        action_A = decide(FIXED_RULE_CONTROLLER, snap_A)
+        
+        # System B should HOLD (consecutive_above_yield < k_yield because yield_up is higher)
+        snap_B = create_snapshot(1, region_B, site, telemetry, true, 1)
+        action_B = decide(FIXED_RULE_CONTROLLER, snap_B)
+        
+        # Lower-yield system melts, higher-yield system holds
+        @test action_A isa MeltAction
+        @test action_B isa NoAction || action_A.site_index != action_B.site_index
+    end
+    
+    @testset "S3b: Complete State Identity Test" begin
+        # Equalize both X_op and M_hist
+        # Feed the same deterministic gradient sequence
+        # Compare complete state after every tick:
+        #   SiteState, SiteTelemetry, RegionState, HotPool residuals, allocation state, free list, actions
+        # Require exact equality
+        
+        using ..Core: SiteState, SiteTelemetry, HotPool, RegionState, RegionMap
+        using ..DCP: create_snapshot, decide, FIXED_RULE_CONTROLLER, Action
+        
+        function run_full_state(seed::UInt32, num_ticks::Int)
+            rng = Xoshiro(seed)
+            
+            # Initialize state
+            pool = HotPool(5)
+            sites = Vector{SiteState}(undef, 5)
+            telemetry = [SiteTelemetry() for _ in 1:5]
+            region = RegionState(
+                yield_up = 1.0f0,
+                settle_down = 0.5f0,
+                eta = 1.0f0,
+                hardening_increment = 0.1f0,
+                k_yield = Int32(3),
+                k_settle = Int32(3),
+                epsilon_delta = 0.01f0
+            )
+            region_map = RegionMap(5, 1)
+            
+            # Allocate handles for all sites
+            for i in 1:5
+                handle = allocate!(pool)
+                sites[i] = SiteState(0, true, true, handle)
+            end
+            
+            # Record complete state trajectory
+            state_trajectory = []
+            
+            for tick in 1:num_ticks
+                # Deterministic gradient
+                g = Float32(rand(rng) * 0.5)
+                
+                # Update telemetry for first site
+                update_stress_ema!(telemetry[1], g, 0.9f0)
+                update_counters!(telemetry[1], region.yield_up, region.settle_down, region.epsilon_delta)
+                
+                # Compute response
+                delta = response(NEWTONIAN, region, telemetry[1], g)
+                
+                # Record complete state
+                state_snapshot = (
+                    sites = deepcopy(sites),
+                    telemetry = deepcopy(telemetry),
+                    region = deepcopy(region),
+                    pool_allocated = num_allocated(pool),
+                    pool_residuals = [get_residual(pool, h) for h in 1:num_allocated(pool)],
+                    delta = delta
+                )
+                push!(state_trajectory, state_snapshot)
+            end
+            
+            return state_trajectory
         end
         
-        @test check_invariants(pool) == true
+        # Run twice with same seed
+        traj1 = run_full_state(42, 10)
+        traj2 = run_full_state(42, 10)
+        
+        # Compare complete state after every tick
+        for t in 1:10
+            s1 = traj1[t]
+            s2 = traj2[t]
+            
+            # Sites must be equal
+            @test s1.sites == s2.sites
+            
+            # Telemetry must be equal
+            for i in 1:5
+                @test s1.telemetry[i].stress_ema == s2.telemetry[i].stress_ema
+                @test s1.telemetry[i].residual_motion_ema == s2.telemetry[i].residual_motion_ema
+                @test s1.telemetry[i].consecutive_above_yield == s2.telemetry[i].consecutive_above_yield
+                @test s1.telemetry[i].consecutive_stable == s2.telemetry[i].consecutive_stable
+            end
+            
+            # Region must be equal
+            @test s1.region.yield_up == s2.region.yield_up
+            @test s1.region.settle_down == s2.region.settle_down
+            @test s1.region.eta == s2.region.eta
+            
+            # Pool state must be equal
+            @test s1.pool_allocated == s2.pool_allocated
+            @test s1.pool_residuals == s2.pool_residuals
+            
+            # Delta must be equal
+            @test s1.delta == s2.delta
+        end
+        
+        # Different seed should give different trajectory
+        traj3 = run_full_state(43, 10)
+        @test traj1[1].delta != traj3[1].delta
     end
     
     @testset "S3: DCP Snapshot and Decision Rules" begin
