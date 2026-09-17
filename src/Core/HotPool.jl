@@ -37,7 +37,7 @@ end
 num_allocated(pool::HotPool)::Int = count(==(true), pool.allocated)
 
 # Check if a handle is valid and allocated
-is_valid_handle(pool::HotPool, handle::Integer)::Bool
+function is_valid_handle(pool::HotPool, handle::Integer)::Bool
     handle_int = Int32(handle)
     return handle_int >= 1 && handle_int <= pool.capacity && pool.allocated[handle_int]
 end

@@ -6,11 +6,6 @@ Telemetry module for tracking substrate dynamics.
 Exports events, metrics, and trace writing functionality.
 """
 
-# Include submodules
-include("Events.jl")
-include("Metrics.jl")
-include("TraceWriter.jl")
-
 # Export types
 export Event, TickEvent, MeltEvent, CommitEvent, HardeningEvent, QChangeEvent, LossEvent
 export Metrics, collect_metrics

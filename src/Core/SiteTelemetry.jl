@@ -27,9 +27,9 @@ mutable struct SiteTelemetry
         new(Float32(stress_ema), Float32(residual_motion_ema),
             Int32(consecutive_above_yield), Int32(consecutive_stable))
     end
+    
+    # Default constructor - Stage-0 seed state
+    SiteTelemetry() = new(0.0f0, 0.0f0, Int32(0), Int32(0))
 end
-
-# Default constructor - Stage-0 seed state
-SiteTelemetry() = SiteTelemetry(0.0, 0.0, 0, 0)
 
 export SiteTelemetry

@@ -64,10 +64,10 @@ include("Constitutive/Newtonian.jl")
 include("Constitutive/BinghamInspired.jl")
 
 # DCP (depends on Core, Telemetry)
+include("DCP/DCP.jl")
 include("DCP/Snapshot.jl")
 include("DCP/Actions.jl")
 include("DCP/FixedRuleController.jl")
-include("DCP/DCP.jl")
 
 # Models (standalone)
 include("Models/Stage0MLP.jl")

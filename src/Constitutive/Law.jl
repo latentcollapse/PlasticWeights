@@ -15,10 +15,6 @@ The constitutive function:
 """
 abstract type ConstitutiveLaw end
 
-# Include concrete implementations
-include("Newtonian.jl")
-include("BinghamInspired.jl")
-
 # Export the abstract type and response function
 export ConstitutiveLaw, response
 

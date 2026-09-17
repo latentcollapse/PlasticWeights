@@ -1,46 +1,53 @@
-```
-# Julia-specific ignores
-Manifest.toml
+# Compiled and build artifacts
 *.ji
-*.lock
-*.tar.gz
-*.tar
-*.zip
+*.o
+*.obj
+*.out
 
 # Dependencies
 .julia/
-deps/
-
-# Build artifacts
-build/
-dist/
-*.so
-*.dylib
-*.dll
+.julia_local/
+.julia_env/
 
 # Logs and temp files
 *.log
 *.tmp
+*.swp
 
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Environment
-.env
-.env.local
-*.env.*
-
-# Coverage
+# Coverage and testing
+.coverage
 coverage/
 htmlcov/
-.coverage
+
+# Build directories
+build/
+dist/
+target/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Package manager caches
+node_modules/
+.npm/
+.yarn/
+.pnpm/
 
 # OS generated files
 .DS_Store
 Thumbs.db
-```node_modules/
-.next/
-node_modules/
+desktop.ini
+
+# Julia-specific
+*.jl.cov
+*.jl.mem
+*.jl.so
+.julia_scratch/
+.julia_build/.next/

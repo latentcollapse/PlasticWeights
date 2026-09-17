@@ -25,25 +25,17 @@ mutable struct SiteState
         end
         new(Int8(q), allocated, superplastic, Int32(hot_handle))
     end
-end
-
-# Default constructor - vacant site
-SiteState() = SiteState(0, false, false, 0)
-
-"""
-    SiteState(; stage0_seed=true)
-
-Stage-0 seed constructor: creates allocated, superplastic site with q=0.
-Requires a valid hot_handle to be assigned by HotPool.
-"""
-function SiteState(; stage0_seed::Bool=false)
-    if stage0_seed
-        # Material sites begin allocated and superplastic with q=0
-        # hot_handle will be assigned by HotPool during initialization
-        return SiteState(0, true, true, 0)  # handle set to 0 temporarily
-    else
-        return SiteState()
-    end
+    
+    # Default constructor - vacant site
+    SiteState() = new(0, false, false, 0)
+    
+    """
+        SiteState(; stage0_seed=true)
+    
+    Stage-0 seed constructor: creates allocated, superplastic site with q=0.
+    Requires a valid hot_handle to be assigned by HotPool.
+    """
+    SiteState(; stage0_seed::Bool=false) = stage0_seed ? new(0, true, true, 0) : new(0, false, false, 0)
 end
 
 # Validation helpers
