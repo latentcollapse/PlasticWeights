@@ -12,30 +12,29 @@ The constitutive function:
 - cannot allocate
 - cannot release
 - cannot mutate exposure directly
+
+Newtonian equation:
+    Δδ = -g / η
+
+where:
+- g is the gradient
+- η (eta) is the viscosity from region state
 """
-struct Newtonian <: ConstitutiveLaw
-    viscosity::Float32
-    
-    Newtonian(viscosity::Real=1.0) = new(Float32(viscosity))
-end
+struct Newtonian <: ConstitutiveLaw end
+
+const NEWTONIAN = Newtonian()
 
 """
     response(law::Newtonian, region_state, site_telemetry, g) -> Float32
 
 Computes the Newtonian constitutive response.
 
-Returns Δδ (change in residual) based on:
-- region state
-- site telemetry
-- gradient g
+Δδ = -g / η
 
 This is a pure function with no side effects.
 """
 function response(law::Newtonian, region_state, site_telemetry, g::Real)::Float32
-    # Newtonian response: linear viscous response
-    # Δδ = -viscosity * g
-    return -law.viscosity * Float32(g)
+    # Newtonian response: Δδ = -g / η
+    eta = region_state.eta
+    return -Float32(g) / eta
 end
-
-# Default Newtonian law
-const DEFAULT_NEWTONIAN = Newtonian(1.0)

@@ -8,22 +8,55 @@ Contract:
 - deterministic site -> region lookup
 - fixed region size for a run
 - no overlap between regions
+
+Persistent material region state contains:
+- id::Int32                    # region identifier
+- site_indices::Vector{Int}    # indices of sites belonging to this region
+- region_size::Int             # number of sites in this region
+- yield_up::Float32            # threshold for melt (sigma > yield_up triggers melt)
+- settle_down::Float32         # threshold for commit (sigma < settle_down enables commit)
+- eta::Float32                 # viscosity parameter for constitutive response
+- hardening_increment::Float32 # amount to add to yield on commit
+- epsilon_delta::Float32       # residual-motion threshold for commit
+- k_yield::Int32               # sustained count threshold for melt
+- k_settle::Int32              # sustained count threshold for commit
 """
 struct RegionState
     id::Int32
     site_indices::Vector{Int}  # indices of sites belonging to this region
     region_size::Int
     
-    function RegionState(id::Integer, site_indices::Vector{Int})
+    # Persistent material parameters (declared state required by controller)
+    yield_up::Float32          # tau_U: threshold for melt
+    settle_down::Float32       # tau_S: threshold for commit  
+    eta::Float32               # viscosity parameter
+    hardening_increment::Float32  # work-hardening amount on commit
+    epsilon_delta::Float32     # residual-motion threshold for commit
+    k_yield::Int32             # sustained above-yield counter threshold for melt
+    k_settle::Int32            # sustained stable counter threshold for commit
+    
+    function RegionState(id::Integer, site_indices::Vector{Int};
+                         yield_up::Real=0.5,
+                         settle_down::Real=0.3,
+                         eta::Real=1.0,
+                         hardening_increment::Real=0.05,
+                         epsilon_delta::Real=0.1,
+                         k_yield::Int32=3,
+                         k_settle::Int32=3)
         if isempty(site_indices)
             error("HardFailure: region $id has empty site_indices")
         end
-        new(Int32(id), site_indices, length(site_indices))
+        new(Int32(id), site_indices, length(site_indices),
+            Float32(yield_up), Float32(settle_down), Float32(eta),
+            Float32(hardening_increment), Float32(epsilon_delta),
+            k_yield, k_settle)
     end
 end
 
 # Default constructor
-RegionState() = RegionState(0, Int[])
+RegionState() = RegionState(0, Int[]; yield_up=0.5, settle_down=0.3, eta=1.0,
+                            hardening_increment=0.05, epsilon_delta=0.1,
+                            k_yield=3, k_settle=3)
 
 """
     RegionMap
@@ -42,7 +75,14 @@ struct RegionMap
     num_sites::Int
     region_size::Int
     
-    function RegionMap(num_sites::Int, region_size::Int)
+    function RegionMap(num_sites::Int, region_size::Int;
+                       yield_up::Real=0.5,
+                       settle_down::Real=0.3,
+                       eta::Real=1.0,
+                       hardening_increment::Real=0.05,
+                       epsilon_delta::Real=0.1,
+                       k_yield::Int32=3,
+                       k_settle::Int32=3)
         if num_sites <= 0
             error("HardFailure: num_sites must be positive, got $num_sites")
         end
@@ -62,7 +102,14 @@ struct RegionMap
             end_idx = r * region_size
             site_indices = collect(start_idx:end_idx)
             
-            regions[r] = RegionState(r, site_indices)
+            regions[r] = RegionState(r, site_indices;
+                                     yield_up=yield_up,
+                                     settle_down=settle_down,
+                                     eta=eta,
+                                     hardening_increment=hardening_increment,
+                                     epsilon_delta=epsilon_delta,
+                                     k_yield=k_yield,
+                                     k_settle=k_settle)
             
             # Map each site to its region
             for idx in site_indices

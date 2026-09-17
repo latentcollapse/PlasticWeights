@@ -12,10 +12,9 @@ Contract:
 - deterministic free-list behavior in reference mode
 """
 mutable struct HotPool
-    residuals::Vector{Float32}      # FP32 residuals
-    free_list::Vector{Int32}        # available handles (excluding 0)
-    allocated::BitVector            # track which slots are allocated
-    next_handle::Int32              # next handle to allocate (for determinism)
+    residuals::Vector{Float32}      # FP32 residuals (index = handle, handle 0 is sentinel)
+    free_list::Vector{Int32}        # available handles (1-based, deterministic order)
+    allocated::BitVector            # track which slots are allocated (index = handle)
     capacity::Int32
     
     function HotPool(capacity::Integer)
@@ -23,18 +22,23 @@ mutable struct HotPool
             error("HardFailure: HotPool capacity must be positive, got $capacity")
         end
         
-        # Handle 0 is reserved as invalid sentinel, so we need capacity+1 slots
-        residuals = zeros(Float32, capacity + 1)
-        free_list = Int32[capacity, capacity-1, ..., 1]  # deterministic order
+        # Handle 0 is reserved as invalid sentinel
+        # We use 1-based indexing: handle h maps to index h
+        # Index 0 is unused/sentinel
+        residuals = zeros(Float32, capacity + 1)  # indices 0..capacity, 0 is sentinel
+        free_list = collect(Int32, capacity:-1:1)  # deterministic order: highest first
         allocated = BitVector(undef, capacity + 1)
         fill!(allocated, false)
+        allocated[1] = false  # ensure index 0 (handle 0 conceptually) is never allocated
+        # Note: In Julia BitVector is 1-indexed, so allocated[h] corresponds to handle h
+        # We'll treat allocated[1] as handle 1, etc. Handle 0 is purely conceptual.
         
-        new(residuals, free_list, allocated, Int32(1), Int32(capacity))
+        new(residuals, free_list, allocated, Int32(capacity))
     end
 end
 
 # Get the number of allocated slots
-num_allocated(pool::HotPool)::Int = count(pool.allocated)
+num_allocated(pool::HotPool)::Int = count(==(true), pool.allocated)
 
 # Check if a handle is valid and allocated
 is_valid_handle(pool::HotPool, handle::Integer)::Bool
@@ -127,20 +131,15 @@ end
     check_invariants(pool::HotPool)
 
 Validates hot pool invariants:
-- handle 0 is never allocated
-- allocated count matches expectations
-- free list + allocated = capacity
+- handle 0 is never allocated (conceptual - we don't store index 0)
+- allocated count + free list length = capacity
+- no handle is both in free list and allocated
+- no double allocation or double release possible
 """
 function check_invariants(pool::HotPool)
-    # Gate: handle 0 must never be allocated
-    if pool.allocated[1]  # index 1 corresponds to handle 0 if we shifted, but we use 1-based indexing
-        # Actually, our handles are 1..capacity mapping to indices 1..capacity
-        # Handle 0 is conceptual sentinel, not stored
-    end
-    
     # Check free list + allocated = capacity
     num_free = length(pool.free_list)
-    num_alloc = count(pool.allocated)
+    num_alloc = count(==(true), pool.allocated)
     
     if num_free + num_alloc != pool.capacity
         error("HardFailure: HotPool invariant violated: free($num_free) + allocated($num_alloc) != capacity($(pool.capacity))")
@@ -153,5 +152,31 @@ function check_invariants(pool::HotPool)
         end
     end
     
+    # Check no duplicates in free list
+    if length(unique(pool.free_list)) != length(pool.free_list)
+        error("HardFailure: duplicate handles in free_list")
+    end
+    
+    # Check all handles in free list are in valid range
+    for handle in pool.free_list
+        if handle < 1 || handle > pool.capacity
+            error("HardFailure: handle $handle in free_list out of range [1, $(pool.capacity)]")
+        end
+    end
+    
     return true
 end
+
+"""
+    has_capacity(pool::HotPool) -> Bool
+
+Returns true if the pool has at least one free handle.
+"""
+has_capacity(pool::HotPool)::Bool = !isempty(pool.free_list)
+
+"""
+    available_count(pool::HotPool) -> Int
+
+Returns the number of available (free) handles.
+"""
+available_count(pool::HotPool)::Int = length(pool.free_list)

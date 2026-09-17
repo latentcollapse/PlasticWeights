@@ -1,26 +1,22 @@
 ```
-# Julia-specific ignores
+# Compiled and build artifacts
 *.ji
-*.jl.cov
-*.jl.info
-.julia/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
 
 # Dependencies
-deps/
-*.tar.gz
-*.tar
-*.zip
+.julia/
+*.jl.cov
+*.jl.lcov
 
-# Build artifacts
-build/
-dist/
-lib/
-scratch/
-
-# Logs
+# Logs and temp files
 *.log
-*.out
-*.err
+*.tmp
+*.swp
 
 # Environment
 .env
@@ -32,21 +28,20 @@ scratch/
 .idea/
 *.swp
 *.swo
-*~
+
+# Build and distribution
+build/
+dist/
+target/
 
 # Coverage
-.coverage
 coverage/
-codecov.yml
-
-# Testing
-test/
-test_*
 *.cov
+*.lcov
 
-# System
-.DS_Store
-Thumbs.db
+# Julia-specific
+.julia/
+*.jl.bak
+*.jl~
 ```node_modules/
 .next/
-node_modules/

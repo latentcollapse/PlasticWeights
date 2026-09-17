@@ -3,10 +3,6 @@
 
 Bingham-inspired constitutive law following the Stage-0 contract.
 
-Models plastic flow with a yield threshold:
-- Below yield: elastic/no flow
-- Above yield: viscous flow
-
 Constitutive API contract:
     response(law, region_state, site_telemetry, g) -> Δδ
 
@@ -16,45 +12,51 @@ The constitutive function:
 - cannot allocate
 - cannot release
 - cannot mutate exposure directly
+
+Bingham-inspired equations:
+    m = max(0, 1 - τ_R / (σ + ε))
+    Δδ = -(g / η) * m
+
+where:
+- τ_R (tau_R) is the yield threshold from region state
+- σ (sigma) is the site stress from telemetry
+- ε (epsilon) is a small constant for numerical stability
+- η (eta) is the viscosity from region state
+- g is the gradient
+- m is the modulation factor [0, 1]
 """
 struct BinghamInspired <: ConstitutiveLaw
-    yield_stress::Float32    # threshold for plastic flow
-    viscosity::Float32       # post-yield viscosity
+    epsilon::Float32  # small constant for numerical stability
     
-    BinghamInspired(yield_stress::Real=0.1, viscosity::Real=1.0) = 
-        new(Float32(yield_stress), Float32(viscosity))
+    BinghamInspired(epsilon::Real=1e-6) = new(Float32(epsilon))
 end
+
+const BINGHAM_INSPIRED = BinghamInspired()
 
 """
     response(law::BinghamInspired, region_state, site_telemetry, g) -> Float32
 
 Computes the Bingham-inspired constitutive response.
 
-Returns Δδ (change in residual) based on:
-- region state
-- site telemetry  
-- gradient g
-
-Behavior:
-- If |g| < yield_stress: no flow (return 0)
-- If |g| >= yield_stress: viscous flow with offset
+m = max(0, 1 - τ_R / (σ + ε))
+Δδ = -(g / η) * m
 
 This is a pure function with no side effects.
 """
 function response(law::BinghamInspired, region_state, site_telemetry, g::Real)::Float32
-    g_float = Float32(g)
-    abs_g = abs(g_float)
+    # Get region parameters
+    tau_R = region_state.yield_up  # yield threshold
+    eta = region_state.eta          # viscosity
     
-    if abs_g < law.yield_stress
-        # Below yield: no plastic flow
-        return 0.0f0
-    else
-        # Above yield: Bingham plastic flow
-        # Sign(g) * (|g| - yield) / viscosity
-        sign_g = ifelse(g_float >= 0, 1.0f0, -1.0f0)
-        return sign_g * (abs_g - law.yield_stress) / law.viscosity
-    end
+    # Get site stress from telemetry
+    sigma = site_telemetry.stress_ema
+    
+    # Compute modulation factor m = max(0, 1 - τ_R / (σ + ε))
+    denom = sigma + law.epsilon
+    m = max(0.0f0, 1.0f0 - tau_R / denom)
+    
+    # Compute Δδ = -(g / η) * m
+    delta_delta = -(Float32(g) / eta) * m
+    
+    return delta_delta
 end
-
-# Default Bingham-inspired law
-const DEFAULT_BINGHAM = BinghamInspired(0.1f0, 1.0f0)
