@@ -1,5 +1,51 @@
-node_modules/
-.next/
-dist/
+```
+# Julia-specific ignores
+*.ji
+*.jl.cov
+*.jl.info
+.julia/
+
+# Dependencies
+deps/
+*.tar.gz
+*.tar
+*.zip
+
+# Build artifacts
 build/
+dist/
+lib/
+scratch/
+
+# Logs
 *.log
+*.out
+*.err
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Coverage
+.coverage
+coverage/
+codecov.yml
+
+# Testing
+test/
+test_*
+*.cov
+
+# System
+.DS_Store
+Thumbs.db
+```node_modules/
+.next/
