@@ -5,16 +5,16 @@ Manages FP32 residuals for superplastic sites.
 
 Contract:
 - one FP32 residual per superplastic site
-- handle 0 reserved as invalid sentinel
+- handle 0 reserved as invalid sentinel (handles are 1:capacity)
 - no consolidated/vacant site owns a hot slot
 - commit releases exactly once
 - melt allocates exactly once
 - deterministic free-list behavior in reference mode
 """
 mutable struct HotPool
-    residuals::Vector{Float32}      # FP32 residuals (index = handle, handle 0 is sentinel)
-    free_list::Vector{Int32}        # available handles (1-based, deterministic order)
-    allocated::BitVector            # track which slots are allocated (index = handle)
+    residuals::Vector{Float32}      # FP32 residuals at indices 1:capacity
+    free_list::Vector{Int32}        # available handles (deterministic order)
+    allocated::BitVector            # track which slots are allocated at indices 1:capacity
     capacity::Int32
     
     function HotPool(capacity::Integer)
@@ -22,16 +22,12 @@ mutable struct HotPool
             error("HardFailure: HotPool capacity must be positive, got $capacity")
         end
         
-        # Handle 0 is reserved as invalid sentinel
-        # We use 1-based indexing: handle h maps to index h
-        # Index 0 is unused/sentinel
-        residuals = zeros(Float32, capacity + 1)  # indices 0..capacity, 0 is sentinel
-        free_list = collect(Int32, capacity:-1:1)  # deterministic order: highest first
-        allocated = BitVector(undef, capacity + 1)
+        # Handles are 1:capacity (handle 0 is invalid sentinel only)
+        # Index h in arrays corresponds to handle h
+        residuals = zeros(Float32, capacity)
+        free_list = collect(Int32, capacity:-1:1)  # deterministic: highest first
+        allocated = BitVector(undef, capacity)
         fill!(allocated, false)
-        allocated[1] = false  # ensure index 0 (handle 0 conceptually) is never allocated
-        # Note: In Julia BitVector is 1-indexed, so allocated[h] corresponds to handle h
-        # We'll treat allocated[1] as handle 1, etc. Handle 0 is purely conceptual.
         
         new(residuals, free_list, allocated, Int32(capacity))
     end
@@ -43,7 +39,7 @@ num_allocated(pool::HotPool)::Int = count(==(true), pool.allocated)
 # Check if a handle is valid and allocated
 is_valid_handle(pool::HotPool, handle::Integer)::Bool
     handle_int = Int32(handle)
-    return handle_int > 0 && handle_int <= pool.capacity && pool.allocated[handle_int]
+    return handle_int >= 1 && handle_int <= pool.capacity && pool.allocated[handle_int]
 end
 
 """
@@ -78,8 +74,8 @@ Releases a hot slot back to the free list.
 Must be called exactly once per allocation (commit releases exactly once).
 """
 function release!(pool::HotPool, handle::Int32)
-    if handle <= 0 || handle > pool.capacity
-        error("HardFailure: invalid handle $handle for release")
+    if handle < 1 || handle > pool.capacity
+        error("HardFailure: invalid handle $handle for release (must be 1:$(pool.capacity))")
     end
     
     if !pool.allocated[handle]
@@ -99,7 +95,7 @@ end
 Gets the residual value for a given handle.
 """
 function get_residual(pool::HotPool, handle::Int32)::Float32
-    if handle <= 0 || handle > pool.capacity
+    if handle < 1 || handle > pool.capacity
         error("HardFailure: invalid handle $handle for get_residual")
     end
     
@@ -116,7 +112,7 @@ end
 Sets the residual value for a given handle.
 """
 function set_residual!(pool::HotPool, handle::Int32, value::Float32)
-    if handle <= 0 || handle > pool.capacity
+    if handle < 1 || handle > pool.capacity
         error("HardFailure: invalid handle $handle for set_residual!")
     end
     
@@ -131,7 +127,7 @@ end
     check_invariants(pool::HotPool)
 
 Validates hot pool invariants:
-- handle 0 is never allocated (conceptual - we don't store index 0)
+- handle 0 is never used (handles are 1:capacity)
 - allocated count + free list length = capacity
 - no handle is both in free list and allocated
 - no double allocation or double release possible
@@ -157,7 +153,7 @@ function check_invariants(pool::HotPool)
         error("HardFailure: duplicate handles in free_list")
     end
     
-    # Check all handles in free list are in valid range
+    # Check all handles in free list are in valid range [1, capacity]
     for handle in pool.free_list
         if handle < 1 || handle > pool.capacity
             error("HardFailure: handle $handle in free_list out of range [1, $(pool.capacity)]")

@@ -20,7 +20,7 @@ using Statistics
 # Core exports
 # ============================================================================
 export SiteState, RegionState, RegionMap, HotPool
-export ZCS, VPS, exposure, get_exposure
+export ZCS, VPS, exposure
 export SiteTelemetry
 
 # ============================================================================
@@ -35,7 +35,7 @@ export BinghamInspired, BINGHAM_INSPIRED
 # ============================================================================
 export DCP, Snapshot, Action
 export decide, apply_action!
-export FixedRuleController
+export FixedRuleController, MeltAction, CommitAction, NoAction
 
 # ============================================================================
 # Model exports
@@ -46,15 +46,6 @@ export Stage0MLP
 # Telemetry exports
 # ============================================================================
 export Event, Metric, TraceWriter
-export TickEvent, MeltEvent, CommitEvent, HardeningEvent, QChangeEvent, LossEvent
-export collect_metrics
-
-# ============================================================================
-# Test runners (for direct access)
-# ============================================================================
-export run_sanity_tests, run_causal_tests, run_invariant_tests
-export run_seed_tests, run_exposure_tests, run_hotpool_tests
-export run_constitutive_tests, run_dcp_tests
 
 # ============================================================================
 # Include submodules in dependency order
@@ -86,17 +77,5 @@ include("Telemetry/Events.jl")
 include("Telemetry/Metrics.jl")
 include("Telemetry/TraceWriter.jl")
 include("Telemetry/Telemetry.jl")
-
-# Tasks (TODO - placeholder)
-# include("Tasks/SyntheticConflictFamily.jl")
-
-# Controls (TODO - unimplemented per spec requirement 14)
-# These are placeholders only - not implemented in this pass
-# include("Controls/Control.jl")
-
-# Tests
-include("Tests/Sanity/runtests.jl")
-include("Tests/Causal/runtests.jl")
-include("Tests/Invariants/runtests.jl")
 
 end # module PlasticWeights

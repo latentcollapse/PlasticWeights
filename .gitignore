@@ -1,27 +1,26 @@
 ```
-# Compiled and build artifacts
+# Julia-specific ignores
+Manifest.toml
 *.ji
-*.o
-*.obj
-*.so
-*.dylib
-*.dll
-*.exe
+*.lock
+*.tar.gz
+*.tar
+*.zip
 
 # Dependencies
 .julia/
-*.jl.cov
-*.jl.lcov
+deps/
+
+# Build artifacts
+build/
+dist/
+*.so
+*.dylib
+*.dll
 
 # Logs and temp files
 *.log
 *.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-.env.*
 
 # Editors
 .vscode/
@@ -29,20 +28,18 @@
 *.swp
 *.swo
 
-# Build and distribution
-build/
-dist/
-target/
+# Environment
+.env
+.env.local
+*.env.*
 
 # Coverage
 coverage/
-*.cov
-*.lcov
+htmlcov/
+.coverage
 
-# Julia-specific
-.julia/
-*.jl.bak
-*.jl~
+# OS generated files
+.DS_Store
+Thumbs.db
 ```node_modules/
 .next/
-node_modules/

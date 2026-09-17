@@ -10,14 +10,16 @@ Conceptual contract:
 This is the only variant-specific forward semantic.
 
 ZCS (Zero-Centered Superplasticity): 
-- Vacant sites expose 0
-- Consolidated sites expose q
-- Superplastic sites expose 0
+- Vacant sites expose 0 (!allocated)
+- Consolidated sites expose q (allocated && !superplastic)
+- Superplastic sites expose 0 (allocated && superplastic)
 
 VPS (Value-Preserving Superplasticity):
-- Vacant sites expose 0
-- Consolidated sites expose q  
-- Superplastic sites expose prior committed q (stored in residual or tracked separately)
+- Vacant sites expose 0 (!allocated)
+- Consolidated sites expose q (allocated && !superplastic)
+- Superplastic sites expose prior committed q (site.q, preserved during melt)
+
+There is NEVER an amplified ±2 state.
 """
 abstract type ExposurePolicy end
 
@@ -41,7 +43,7 @@ Value-Preserving Superplasticity exposure policy.
 Returns:
 - 0 for vacant sites (!allocated)
 - q for consolidated sites (allocated && !superplastic)
-- prior_q for superplastic sites (the q value before melting)
+- site.q for superplastic sites (the q value before melting, preserved in site.q)
 """
 struct VPS <: ExposurePolicy end
 
@@ -67,28 +69,23 @@ function exposure(site::SiteState, policy::ZCS)::Int8
 end
 
 """
-    exposure(site::SiteState, policy::VPS; prior_q::Int8=site.q) -> Int8
+    exposure(site::SiteState, policy::VPS) -> Int8
 
 VPS exposure:
 - Vacant: 0
 - Consolidated: q
-- Superplastic: prior committed q (passed as keyword arg or defaults to current q)
-
-Note: For superplastic sites, the prior_q must be tracked externally
-(e.g., in site telemetry or passed from the substrate state).
+- Superplastic: prior committed q (which equals site.q since melt preserves q)
 """
-function exposure(site::SiteState, policy::VPS; prior_q::Int8=site.q)::Int8
+function exposure(site::SiteState, policy::VPS)::Int8
     if !site.allocated
         # Vacant site exposes 0
         return Int8(0)
     elseif site.superplastic
         # Superplastic VPS exposes prior committed q
-        return prior_q
+        # Since melt preserves site.q, the current site.q IS the prior committed q
+        return site.q
     else
         # Consolidated exposes q
         return site.q
     end
 end
-
-# Export helper for getting exposure with a policy
-get_exposure(site::SiteState, policy::ExposurePolicy; kwargs...)::Int8 = exposure(site, policy; kwargs...)

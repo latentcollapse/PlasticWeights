@@ -9,24 +9,32 @@ Contract:
 - fixed region size for a run
 - no overlap between regions
 
-Persistent material region state contains:
+Persistent material region state contains (MUTABLE for work-hardening):
 - id::Int32                    # region identifier
 - site_indices::Vector{Int}    # indices of sites belonging to this region
 - region_size::Int             # number of sites in this region
-- yield_up::Float32            # threshold for melt (sigma > yield_up triggers melt)
+- yield_up::Float32            # threshold for melt (sigma > yield_up triggers melt) - MUTABLE
 - settle_down::Float32         # threshold for commit (sigma < settle_down enables commit)
 - eta::Float32                 # viscosity parameter for constitutive response
 - hardening_increment::Float32 # amount to add to yield on commit
 - epsilon_delta::Float32       # residual-motion threshold for commit
 - k_yield::Int32               # sustained count threshold for melt
 - k_settle::Int32              # sustained count threshold for commit
+
+Validation:
+    yield_up > settle_down
+    eta > 0
+    hardening_increment > 0
+    k_yield >= 1
+    k_settle >= 1
 """
-struct RegionState
+mutable struct RegionState
     id::Int32
     site_indices::Vector{Int}  # indices of sites belonging to this region
     region_size::Int
     
     # Persistent material parameters (declared state required by controller)
+    # yield_up is mutable for work-hardening
     yield_up::Float32          # tau_U: threshold for melt
     settle_down::Float32       # tau_S: threshold for commit  
     eta::Float32               # viscosity parameter
@@ -41,15 +49,33 @@ struct RegionState
                          eta::Real=1.0,
                          hardening_increment::Real=0.05,
                          epsilon_delta::Real=0.1,
-                         k_yield::Int32=3,
-                         k_settle::Int32=3)
+                         k_yield::Integer=3,
+                         k_settle::Integer=3)
         if isempty(site_indices)
             error("HardFailure: region $id has empty site_indices")
         end
+        
+        # Validate constraints
+        if Float32(yield_up) <= Float32(settle_down)
+            error("HardFailure: region $id yield_up ($(yield_up)) must be > settle_down ($(settle_down))")
+        end
+        if Float32(eta) <= 0
+            error("HardFailure: region $id eta must be > 0, got $(eta)")
+        end
+        if Float32(hardening_increment) <= 0
+            error("HardFailure: region $id hardening_increment must be > 0, got $(hardening_increment)")
+        end
+        if Int32(k_yield) < 1
+            error("HardFailure: region $id k_yield must be >= 1, got $(k_yield)")
+        end
+        if Int32(k_settle) < 1
+            error("HardFailure: region $id k_settle must be >= 1, got $(k_settle)")
+        end
+        
         new(Int32(id), site_indices, length(site_indices),
             Float32(yield_up), Float32(settle_down), Float32(eta),
             Float32(hardening_increment), Float32(epsilon_delta),
-            k_yield, k_settle)
+            Int32(k_yield), Int32(k_settle))
     end
 end
 
@@ -81,8 +107,8 @@ struct RegionMap
                        eta::Real=1.0,
                        hardening_increment::Real=0.05,
                        epsilon_delta::Real=0.1,
-                       k_yield::Int32=3,
-                       k_settle::Int32=3)
+                       k_yield::Integer=3,
+                       k_settle::Integer=3)
         if num_sites <= 0
             error("HardFailure: num_sites must be positive, got $num_sites")
         end
@@ -122,7 +148,7 @@ struct RegionMap
 end
 
 # Get region ID for a site
-get_region_id(map::RegionMap, site_index::Int)::Int
+function get_region_id(map::RegionMap, site_index::Int)::Int
     if site_index < 1 || site_index > map.num_sites
         error("HardFailure: site_index $site_index out of bounds [1, $(map.num_sites)]")
     end
@@ -130,7 +156,7 @@ get_region_id(map::RegionMap, site_index::Int)::Int
 end
 
 # Get region state by ID
-get_region(map::RegionMap, region_id::Int)::RegionState
+function get_region(map::RegionMap, region_id::Int)::RegionState
     if region_id < 1 || region_id > length(map.regions)
         error("HardFailure: region_id $region_id out of bounds [1, $(length(map.regions))]")
     end

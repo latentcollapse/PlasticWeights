@@ -5,13 +5,18 @@ DCP actions for substrate transitions.
 
 Actions are immutable declarations of intended changes.
 Applied atomically in step 12 of the tick order.
+
+Rules:
+- consolidated allocated site -> MELT iff consecutive_above_yield >= k_yield and budget/hot slot permits
+- superplastic site -> COMMIT iff consecutive_stable >= k_settle
+- otherwise HOLD
 """
 abstract type Action end
 
 """
     NoAction <: Action
 
-No operation - site remains unchanged.
+No operation - site remains unchanged (HOLD).
 """
 struct NoAction <: Action end
 
@@ -35,36 +40,6 @@ struct CommitAction <: Action
     site_index::Int32
 end
 
-"""
-    HardenAction <: Action
-
-Applies hardening to a site.
-"""
-struct HardenAction <: Action
-    site_index::Int32
-    hardness_delta::Float32
-end
-
-"""
-    SetQAction <: Action
-
-Sets the ternary state q of a site.
-"""
-struct SetQAction <: Action
-    site_index::Int32
-    new_q::Int8
-end
-
-"""
-    CompositeAction <: Action
-
-Combines multiple actions for a single site.
-"""
-struct CompositeAction <: Action
-    site_index::Int32
-    actions::Vector{Action}
-end
-
 # Default no-action
 const NO_ACTION = NoAction()
 
@@ -72,5 +47,3 @@ const NO_ACTION = NoAction()
 make_no_action() = NO_ACTION
 make_melt(site_index::Integer) = MeltAction(Int32(site_index))
 make_commit(site_index::Integer) = CommitAction(Int32(site_index))
-make_harden(site_index::Integer, delta::Real) = HardenAction(Int32(site_index), Float32(delta))
-make_set_q(site_index::Integer, q::Integer) = SetQAction(Int32(site_index), Int8(q))
