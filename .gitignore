@@ -43,3 +43,4 @@ htmlcov/
 Thumbs.db
 ```node_modules/
 .next/
+node_modules/
