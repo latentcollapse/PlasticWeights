@@ -22,40 +22,42 @@ end
 
 """Return the number of applied MELT transitions in an event trace."""
 melt_count(events::AbstractVector{<:DevelopmentalEvent})::Int =
-    count(event -> event isa MeltEvent, events)
+    count(event -> event isa MeltEvent || event isa FPMeltEvent, events)
 
 """Return the number of applied COMMIT transitions in an event trace."""
 commit_count(events::AbstractVector{<:DevelopmentalEvent})::Int =
-    count(event -> event isa CommitEvent, events)
+    count(event -> event isa CommitEvent || event isa FPCommitEvent, events)
 
 """
     nonzero_prior_remelt_count(events)
 
-Count MELT transitions whose prior committed ternary state was ±1.
+Count MELT transitions whose prior committed state was nonzero.
 
 This is the divergence-fuel metric for the ZCS/VPS comparison: remelting a
 site whose prior committed value is 0 does not distinguish the two exposure
 policies.
 """
 nonzero_prior_remelt_count(events::AbstractVector{<:DevelopmentalEvent})::Int =
-    count(event -> event isa MeltEvent && event.prior_q != 0, events)
+    count(event -> (event isa MeltEvent && event.prior_q != 0) ||
+                   (event isa FPMeltEvent && event.prior_w != 0.0f0), events)
 
 """
     commit_flip_count(events)
 
-Count reconsolidations whose committed ternary value differs from the prior
-committed value.
+Count reconsolidations whose committed value differs from the prior value.
 """
 commit_flip_count(events::AbstractVector{<:DevelopmentalEvent})::Int =
-    count(event -> event isa CommitEvent && event.prior_q != event.committed_q,
+    count(event -> (event isa CommitEvent && event.prior_q != event.committed_q) ||
+                   (event isa FPCommitEvent && event.prior_w != event.committed_w),
         events)
 
 """Sum immediate ZCS exposure-lesion magnitudes across all MELT events."""
 function zcs_lesion_total(events::AbstractVector{<:DevelopmentalEvent})::Float64
     total = 0.0
     for event in events
-        event isa MeltEvent || continue
-        total += Float64(event.zcs_lesion_size)
+        if event isa MeltEvent || event isa FPMeltEvent
+            total += Float64(event.zcs_lesion_size)
+        end
     end
     return total
 end
@@ -64,8 +66,9 @@ end
 function hardening_total(events::AbstractVector{<:DevelopmentalEvent})::Float64
     total = 0.0
     for event in events
-        event isa CommitEvent || continue
-        total += Float64(event.yield_after - event.yield_before)
+        if event isa CommitEvent || event isa FPCommitEvent
+            total += Float64(event.yield_after - event.yield_before)
+        end
     end
     return total
 end
@@ -141,11 +144,11 @@ function superplastic_durations(
     durations = Int64[]
 
     for event in events
-        if event isa MeltEvent
+        if event isa MeltEvent || event isa FPMeltEvent
             haskey(open_melts, event.site_index) &&
                 error("HardFailure: site $(event.site_index) melted twice without an intervening commit")
             open_melts[event.site_index] = event.tick
-        elseif event isa CommitEvent
+        elseif event isa CommitEvent || event isa FPCommitEvent
             haskey(open_melts, event.site_index) || continue
             start_tick = pop!(open_melts, event.site_index)
             duration = event.tick - start_tick
@@ -212,9 +215,27 @@ function summarize_events(
             haskey(open_melts, event.site_index) &&
                 error("HardFailure: duplicate MELT for site $(event.site_index) before COMMIT")
             open_melts[event.site_index] = tick
+        elseif event isa FPMeltEvent
+            melts += 1
+            event.prior_w != 0.0f0 && (remelts += 1)
+            zcs_lesion += Float64(event.zcs_lesion_size)
+
+            haskey(open_melts, event.site_index) &&
+                error("HardFailure: duplicate MELT for site $(event.site_index) before COMMIT")
+            open_melts[event.site_index] = tick
         elseif event isa CommitEvent
             commits += 1
             event.prior_q != event.committed_q && (flips += 1)
+            hardening += Float64(event.yield_after - event.yield_before)
+
+            if haskey(open_melts, event.site_index)
+                duration_sum += tick - open_melts[event.site_index]
+                duration_count += 1
+                delete!(open_melts, event.site_index)
+            end
+        elseif event isa FPCommitEvent
+            commits += 1
+            event.prior_w != event.committed_w && (flips += 1)
             hardening += Float64(event.yield_after - event.yield_before)
 
             if haskey(open_melts, event.site_index)

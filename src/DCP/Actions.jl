@@ -55,14 +55,21 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
         error("HardFailure: COMMIT site owns invalid hot handle")
 
     delta = get_residual(substrate.pool, site.hot_handle)
-    new_q = ternary_round(commit_base(site, policy) + delta)
     old_handle = site.hot_handle
     region = get_region_for_site(substrate.region_map, i)
 
     # Commit is exposed only after this tick's immutable exposure snapshot has
     # already been consumed by the forward/backward path.
     release!(substrate.pool, old_handle)
-    site.q = new_q
+    if site isa SiteState
+        new_q = ternary_round(commit_base(site, policy) + delta)
+        site.q = new_q
+    elseif site isa FPSiteState
+        new_w = commit_base(site, policy) + delta
+        site.w = new_w
+    else
+        error("HardFailure: unknown site type $(typeof(site))")
+    end
     site.superplastic = false
     site.hot_handle = Int32(0)
     reset_lifecycle_counters!(substrate.telemetry[i])

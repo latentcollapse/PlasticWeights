@@ -154,8 +154,27 @@ struct _PendingCommitObservation <: _PendingLifecycleObservation
     hardening_increment::Float32
 end
 
+struct _PendingFPMeltObservation <: _PendingLifecycleObservation
+    site_index::Int32
+    region_id::Int32
+    prior_w::Float32
+    stress::Float32
+    yield_up::Float32
+    zcs_lesion_size::Float32
+end
+
+struct _PendingFPCommitObservation <: _PendingLifecycleObservation
+    site_index::Int32
+    region_id::Int32
+    prior_w::Float32
+    residual::Float32
+    yield_before::Float32
+    hardening_increment::Float32
+end
+
 """Concrete union of pre-action lifecycle observations."""
-const PendingObservation = Union{Nothing, _PendingMeltObservation, _PendingCommitObservation}
+const PendingObservation = Union{Nothing, _PendingMeltObservation, _PendingCommitObservation,
+                                 _PendingFPMeltObservation, _PendingFPCommitObservation}
 
 """
     observe_action_before(substrate, action, policy)
@@ -177,16 +196,30 @@ function observe_action_before(substrate::SubstrateState,
 
     region = get_region_for_site(substrate.region_map, i)
     telemetry = substrate.telemetry[i]
-    lesion = policy isa ZCS ? abs(Float32(site.q)) : 0.0f0
 
-    return _PendingMeltObservation(
-        Int32(i),
-        region.id,
-        site.q,
-        telemetry.stress_ema,
-        region.yield_up,
-        lesion,
-    )
+    if site isa SiteState
+        lesion = policy isa ZCS ? abs(Float32(site.q)) : 0.0f0
+        return _PendingMeltObservation(
+            Int32(i),
+            region.id,
+            site.q,
+            telemetry.stress_ema,
+            region.yield_up,
+            lesion,
+        )
+    elseif site isa FPSiteState
+        lesion = policy isa ZCS ? abs(site.w) : 0.0f0
+        return _PendingFPMeltObservation(
+            Int32(i),
+            region.id,
+            site.w,
+            telemetry.stress_ema,
+            region.yield_up,
+            lesion,
+        )
+    else
+        error("HardFailure: unknown site type $(typeof(site))")
+    end
 end
 
 function observe_action_before(substrate::SubstrateState,
@@ -201,14 +234,27 @@ function observe_action_before(substrate::SubstrateState,
 
     region = get_region_for_site(substrate.region_map, i)
 
-    return _PendingCommitObservation(
-        Int32(i),
-        region.id,
-        site.q,
-        get_residual(substrate.pool, site.hot_handle),
-        region.yield_up,
-        region.hardening_increment,
-    )
+    if site isa SiteState
+        return _PendingCommitObservation(
+            Int32(i),
+            region.id,
+            site.q,
+            get_residual(substrate.pool, site.hot_handle),
+            region.yield_up,
+            region.hardening_increment,
+        )
+    elseif site isa FPSiteState
+        return _PendingFPCommitObservation(
+            Int32(i),
+            region.id,
+            site.w,
+            get_residual(substrate.pool, site.hot_handle),
+            region.yield_up,
+            region.hardening_increment,
+        )
+    else
+        error("HardFailure: unknown site type $(typeof(site))")
+    end
 end
 
 """
@@ -251,6 +297,34 @@ end
 
 function record_action_after!(recorder::DevelopmentalRecorder,
     tick::Integer,
+    pending::_PendingFPMeltObservation,
+    substrate::SubstrateState)
+    i = Int(pending.site_index)
+    site = substrate.sites[i]
+
+    site.allocated && site.superplastic ||
+        error("HardFailure: MELT post-state is not allocated+superplastic at site $i")
+    site.w == pending.prior_w ||
+        error("HardFailure: MELT changed committed w at site $i")
+    is_valid_handle(substrate.pool, site.hot_handle) ||
+        error("HardFailure: MELT post-state has invalid hot handle at site $i")
+    get_residual(substrate.pool, site.hot_handle) == 0.0f0 ||
+        error("HardFailure: MELT hot residual was not initialized to zero at site $i")
+
+    event = FPMeltEvent(
+        tick,
+        i,
+        pending.region_id,
+        pending.prior_w,
+        pending.stress,
+        pending.yield_up,
+        pending.zcs_lesion_size,
+    )
+    return _append_event!(recorder, event)
+end
+
+function record_action_after!(recorder::DevelopmentalRecorder,
+    tick::Integer,
     pending::_PendingCommitObservation,
     substrate::SubstrateState)
     i = Int(pending.site_index)
@@ -272,6 +346,36 @@ function record_action_after!(recorder::DevelopmentalRecorder,
         pending.region_id,
         pending.prior_q,
         site.q,
+        pending.residual,
+        pending.yield_before,
+        region.yield_up,
+    )
+    return _append_event!(recorder, event)
+end
+
+function record_action_after!(recorder::DevelopmentalRecorder,
+    tick::Integer,
+    pending::_PendingFPCommitObservation,
+    substrate::SubstrateState)
+    i = Int(pending.site_index)
+    site = substrate.sites[i]
+    region = get_region(substrate.region_map, pending.region_id)
+
+    site.allocated && !site.superplastic ||
+        error("HardFailure: COMMIT post-state is not allocated+consolidated at site $i")
+    site.hot_handle == 0 ||
+        error("HardFailure: COMMIT post-state retained a hot handle at site $i")
+
+    expected_yield_after = pending.yield_before + pending.hardening_increment
+    region.yield_up == expected_yield_after ||
+        error("HardFailure: COMMIT hardening mismatch at site $i")
+
+    event = FPCommitEvent(
+        tick,
+        i,
+        pending.region_id,
+        pending.prior_w,
+        site.w,
         pending.residual,
         pending.yield_before,
         region.yield_up,

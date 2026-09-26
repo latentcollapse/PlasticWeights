@@ -369,3 +369,4 @@ end
 include("telemetry.jl")
 include("c3.jl")
 include("material_training.jl")
+include("continuous_fp.jl")

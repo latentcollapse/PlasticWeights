@@ -23,5 +23,22 @@ function exposure_snapshot(sites::AbstractVector{SiteState}, policy::ExposurePol
     return Int8[exposure(site, policy) for site in sites]
 end
 
+function exposure(site::FPSiteState, ::ZCS)::Float32
+    !site.allocated && return 0.0f0
+    site.superplastic && return 0.0f0
+    return site.w
+end
+
+function exposure(site::FPSiteState, ::VPS)::Float32
+    !site.allocated && return 0.0f0
+    return site.w
+end
+
+function exposure_snapshot(sites::AbstractVector{FPSiteState}, policy::ExposurePolicy)::Vector{Float32}
+    return Float32[exposure(site, policy) for site in sites]
+end
+
 commit_base(site::SiteState, ::ZCS)::Float32 = 0.0f0
 commit_base(site::SiteState, ::VPS)::Float32 = Float32(site.q)
+commit_base(site::FPSiteState, ::ZCS)::Float32 = 0.0f0
+commit_base(site::FPSiteState, ::VPS)::Float32 = site.w
