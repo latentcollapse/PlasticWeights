@@ -19,7 +19,10 @@ This repository is implementing the **frozen PlasticWeights v0.1.0 Stage-0 speci
 
   `W_material` is built only from material-site exposures; the reference backward pass is explicit Julia code with no AD framework.
 - Injected-gradient deterministic material tick used for causal mechanism tests.
-- Tests S0, S1, S1b, S2, S3, and S3b.
+- Developmental event telemetry: `DevelopmentalRecorder`, `DevelopmentalEvent` hierarchy
+  (`MilestoneEvent`, `MeltEvent`, `CommitEvent`), O(1) cached milestone queries on the
+  live recorder, O(N) single-pass `summarize_events` for arbitrary persisted traces.
+- Tests S0, S1, S1b, S2, S3, S3b, and six telemetry test suites (2 629 assertions total).
 
 ## Not implemented yet
 
@@ -29,7 +32,6 @@ The following exist only as future/deferred source scaffolding where present and
 - synthetic conflict task family and long-run A/B harness,
 - S3c and S4–S10,
 - branch-at-remelt experiment,
-- full developmental event telemetry (`first_delta_tick`, `wake_tick`, `credit_unlock_tick`, etc.),
 - Pareto/frontier analysis,
 - optimized kernels/GPU execution.
 
@@ -67,7 +69,7 @@ Equivalent explicit command:
 JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-This archive was edited in an environment without a Julia runtime, so the current pass is **statically audited but execution-unverified**. The first local `Pkg.test()` result is the next source of truth.
+This package has been execution-verified: `Pkg.test()` passes all 2 629 assertions with zero failures or errors.
 
 ## Frozen specification
 

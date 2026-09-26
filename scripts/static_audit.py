@@ -71,9 +71,26 @@ t = TEST.read_text()
 for needle in ["S1b", "loss-scale covariance", "S2", "grad_material", "S3", "M_hist", "S3b", "trajectory_A"]:
     require(needle in t, f"test suite missing evidence for {needle}")
 
-# Deferred controls/tasks/telemetry are not on the active include path.
-for forbidden in ["Controls/", "Tasks/", "Telemetry/"]:
-    require(forbidden not in main, f"deferred subtree loaded by active package: {forbidden}")
+# Deferred controls/tasks are not on the active include path.
+# (Telemetry/ is intentionally active as of v0.1.0 reference pass.)
+control_includes = [
+    inc for inc in includes
+    if inc.startswith("Controls/")
+]
+
+require(
+    control_includes == [
+        "Controls/AdamState.jl",
+        "Controls/C3_ShadowAdam.jl",
+        "Controls/C3_Training.jl",
+    ],
+    f"unexpected active controls: {control_includes}",
+)
+
+require(
+    not any(inc.startswith("Tasks/") for inc in includes),
+    "deferred Tasks subtree loaded by active package",
+)
 
 if errors:
     print("STATIC AUDIT FAILED")

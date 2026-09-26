@@ -1,3 +1,8 @@
-# Experiment telemetry — deferred
+"""
+    PlasticWeights
 
-Long-run experiment telemetry is intentionally deferred until the deterministic reference kernel passes S0–S3b. Stage-0 will later need developmental events such as `first_delta_tick`, `wake_tick`, `credit_unlock_tick`, melt/commit counts, prior-q class, superplastic duration, yield trajectories, stress trajectories, and ZCS lesion size.
+Deterministic Stage-0 reference kernel for the frozen PlasticWeights v0.1.0
+specification. The active package includes the causal reference kernel through
+S3b and observer-only developmental telemetry; long-run tasks, control arms,
+and later experimental infrastructure remain deferred.
+"""

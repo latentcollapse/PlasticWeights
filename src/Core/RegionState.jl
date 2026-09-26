@@ -17,18 +17,25 @@ mutable struct RegionState
     k_settle::Int32
 
     function RegionState(id::Integer, site_indices::AbstractVector{<:Integer};
-                         yield_up::Real=0.5f0,
-                         settle_down::Real=0.3f0,
-                         eta::Real=1.0f0,
-                         hardening_increment::Real=0.05f0,
-                         epsilon_delta::Real=0.1f0,
-                         k_yield::Integer=3,
-                         k_settle::Integer=3)
-        isempty(site_indices) && error("HardFailure: region $id has no sites")
+        yield_up::Real=0.5f0,
+        settle_down::Real=0.3f0,
+        eta::Real=1.0f0,
+        hardening_increment::Real=0.05f0,
+        epsilon_delta::Real=0.1f0,
+        k_yield::Integer=3,
+        k_settle::Integer=3)
+        isempty(site_indices) &&
+            error("HardFailure: region $id has no sites")
+
         idx = Int.(collect(site_indices))
-        issorted(idx) || error("HardFailure: region $id site indices must be sorted")
-        for j in 2:length(idx)
-            idx[j] == idx[j-1] + 1 || error("HardFailure: region $id must be contiguous")
+
+
+        issorted(idx) ||
+            error("HardFailure: region $id site indices must be sorted")
+
+        for (prev, curr) in zip(idx, Iterators.drop(idx, 1))
+            curr == prev + 1 ||
+                error("HardFailure: region $id must be contiguous")
         end
 
         yu = Float32(yield_up)
@@ -63,13 +70,13 @@ struct RegionMap
     region_size::Int32
 
     function RegionMap(num_sites::Integer, region_size::Integer;
-                       yield_up::Real=0.5f0,
-                       settle_down::Real=0.3f0,
-                       eta::Real=1.0f0,
-                       hardening_increment::Real=0.05f0,
-                       epsilon_delta::Real=0.1f0,
-                       k_yield::Integer=3,
-                       k_settle::Integer=3)
+        yield_up::Real=0.5f0,
+        settle_down::Real=0.3f0,
+        eta::Real=1.0f0,
+        hardening_increment::Real=0.05f0,
+        epsilon_delta::Real=0.1f0,
+        k_yield::Integer=3,
+        k_settle::Integer=3)
         num_sites > 0 || error("HardFailure: num_sites must be positive")
         64 <= region_size <= 256 ||
             error("HardFailure: Stage-0 region_size must be in 64:256, got $region_size")

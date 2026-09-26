@@ -2,7 +2,7 @@
 struct FixedRuleController <: DCP end
 const FIXED_RULE_CONTROLLER = FixedRuleController()
 
-function decide(::FixedRuleController, snapshot::Snapshot)::Action
+function decide(::FixedRuleController, snapshot::Snapshot)::LifecycleAction
     if snapshot.allocated && !snapshot.superplastic &&
        snapshot.consecutive_above_yield >= snapshot.k_yield &&
        snapshot.melt_budget_available

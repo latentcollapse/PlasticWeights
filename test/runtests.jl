@@ -11,17 +11,17 @@ function substrate_fingerprint(s::SubstrateState)
     sites = Tuple((site.q, site.allocated, site.superplastic, site.hot_handle)
                   for site in s.sites)
     telemetry = Tuple((bits(t.stress_ema), bits(t.residual_motion_ema),
-                       t.consecutive_above_yield, t.consecutive_stable)
+        t.consecutive_above_yield, t.consecutive_stable)
                       for t in s.telemetry)
     regions = Tuple((r.id, Tuple(r.site_indices), r.region_size,
-                     bits(r.yield_up), bits(r.settle_down), bits(r.eta),
-                     bits(r.hardening_increment), bits(r.epsilon_delta),
-                     r.k_yield, r.k_settle)
+        bits(r.yield_up), bits(r.settle_down), bits(r.eta),
+        bits(r.hardening_increment), bits(r.epsilon_delta),
+        r.k_yield, r.k_settle)
                     for r in s.region_map.regions)
     pool = (Tuple(bits(x) for x in s.pool.residuals),
-            Tuple(s.pool.free_list), Tuple(s.pool.allocated), s.pool.capacity)
+        Tuple(s.pool.free_list), Tuple(s.pool.allocated), s.pool.capacity)
     return (sites=sites, telemetry=telemetry, regions=regions, pool=pool,
-            max_superplastic=s.max_superplastic)
+        max_superplastic=s.max_superplastic)
 end
 
 # S3 explicitly partitions current causal state into X_op and the one retained
@@ -29,21 +29,21 @@ end
 # variable is canonicalized before subsequent load is applied.
 function xop_fingerprint_without_yield(s::SubstrateState)
     sites = Tuple((site.q, site.allocated, site.superplastic, site.hot_handle,
-                   site.superplastic ? bits(get_residual(s.pool, site.hot_handle)) : nothing)
+        site.superplastic ? bits(get_residual(s.pool, site.hot_handle)) : nothing)
                   for site in s.sites)
     telemetry = Tuple((bits(t.stress_ema), bits(t.residual_motion_ema),
-                       t.consecutive_above_yield, t.consecutive_stable)
+        t.consecutive_above_yield, t.consecutive_stable)
                       for t in s.telemetry)
     region_nonhistory = Tuple((r.id, Tuple(r.site_indices), r.region_size,
-                               bits(r.settle_down), bits(r.eta),
-                               bits(r.hardening_increment), bits(r.epsilon_delta),
-                               r.k_yield, r.k_settle)
+        bits(r.settle_down), bits(r.eta),
+        bits(r.hardening_increment), bits(r.epsilon_delta),
+        r.k_yield, r.k_settle)
                               for r in s.region_map.regions)
     pool = (Tuple(bits(x) for x in s.pool.residuals),
-            Tuple(s.pool.free_list), Tuple(s.pool.allocated), s.pool.capacity)
+        Tuple(s.pool.free_list), Tuple(s.pool.allocated), s.pool.capacity)
     return (sites=sites, telemetry=telemetry,
-            region_nonhistory=region_nonhistory, pool=pool,
-            max_superplastic=s.max_superplastic)
+        region_nonhistory=region_nonhistory, pool=pool,
+        max_superplastic=s.max_superplastic)
 end
 
 @testset "PlasticWeights v0.1.0 deterministic reference kernel" begin
@@ -104,7 +104,7 @@ end
         @test check_invariants(seed)
         @test num_allocated(seed.pool) == 64
         @test all(site -> site.q == 0 && site.allocated && site.superplastic &&
-                          is_valid_handle(seed.pool, site.hot_handle), seed.sites)
+                              is_valid_handle(seed.pool, site.hot_handle), seed.sites)
         @test all(site -> get_residual(seed.pool, site.hot_handle) === 0.0f0, seed.sites)
     end
 
@@ -115,7 +115,7 @@ end
         initial_yield = substrate.region_map.regions[1].yield_up
 
         snap = Snapshot(1, 1, true, false, 0.75f0, 0.0f0, 2, 0,
-                        0.5f0, 0.25f0, 2, 2, 0.05f0, true, 7)
+            0.5f0, 0.25f0, 2, 2, 0.05f0, true, 7)
         a1 = decide(FIXED_RULE_CONTROLLER, snap)
         a2 = decide(FixedRuleController(), snap)
         @test action_code(a1) == (:melt, Int32(1))
@@ -143,7 +143,7 @@ end
 
         # Budget is part of declared operative state and is a hard gate.
         budgeted = initialize_consolidated_substrate(64; region_size=64,
-                                                     max_superplastic=1)
+            max_superplastic=1)
         apply_action!(budgeted, MeltAction(Int32(1)), ZCS())
         @test_throws ErrorException apply_action!(budgeted, MeltAction(Int32(2)), ZCS())
         @test check_invariants(budgeted)
@@ -151,7 +151,7 @@ end
 
     @testset "S1 — Newtonian equivalence" begin
         region = RegionState(1, 1:64; yield_up=0.5f0, settle_down=0.25f0,
-                             eta=2.0f0, hardening_increment=0.125f0)
+            eta=2.0f0, hardening_increment=0.125f0)
         telemetry = SiteTelemetry()
         gradients = Float32[1.0, -0.5, 0.25, -1.5, 0.0, 0.75]
         delta_material = 0.0f0
@@ -168,13 +168,13 @@ end
 
     @testset "S1 — Bingham-inspired law sanity" begin
         region = RegionState(1, 1:64; yield_up=0.5f0, settle_down=0.25f0,
-                             eta=1.0f0, hardening_increment=0.125f0)
+            eta=1.0f0, hardening_increment=0.125f0)
         law = BinghamInspired(0.125f0)
         low = SiteTelemetry(0.25f0)
         high = SiteTelemetry(1.0f0)
         @test response(law, region, low, 1.0f0) === 0.0f0
         expected_m = 1.0f0 - 0.5f0 / 1.125f0
-        @test response(law, region, high, 1.0f0) ≈ -expected_m atol=1.0f-6
+        @test response(law, region, high, 1.0f0) ≈ -expected_m atol = 1.0f-6
     end
 
     @testset "S1b — loss-scale covariance" begin
@@ -197,12 +197,14 @@ end
         saw_commit = false
 
         for (tick, g) in enumerate(gseq)
-            gb = zeros(Float32, 64); gb[1] = g
-            gs = zeros(Float32, 64); gs[1] = k * g
+            gb = zeros(Float32, 64)
+            gb[1] = g
+            gs = zeros(Float32, 64)
+            gs[1] = k * g
             rb = reference_material_tick!(base, gb, law_base, FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                beta=0.5f0, gamma=0.5f0, tick=tick)
             rs = reference_material_tick!(scaled, gs, law_scaled, FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                beta=0.5f0, gamma=0.5f0, tick=tick)
 
             @test action_fingerprint(rb.actions) == action_fingerprint(rs.actions)
             @test Tuple(rb.exposures) == Tuple(rs.exposures)
@@ -248,12 +250,12 @@ end
         @test all(==(0.0f0), exposures)
 
         # Nondegenerate two-example batch.
-        X = Float32[ 0.5  -0.4;
-                     0.3   0.9;
-                    -0.2   0.7;
-                     0.8  -0.1]
+        X = Float32[0.5 -0.4;
+            0.3 0.9;
+            -0.2 0.7;
+            0.8 -0.1]
         target = Float32[1.0 -0.25;
-                        -0.5  0.75]
+            -0.5 0.75]
         b = backward_mse(mlp, X, exposures, target)
 
         @test all(==(0.0f0), b.forward.preactivation)
@@ -299,11 +301,12 @@ end
             # The fourth load reverses sign. A has already melted, so the same
             # signed load now deforms its latent residual while B remains cold.
             signed_g = tick == 4 ? -1.0f0 : 1.0f0
-            g = zeros(Float32, 64); g[1] = signed_g
+            g = zeros(Float32, 64)
+            g[1] = signed_g
             ra = reference_material_tick!(A, g, NEWTONIAN, FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                beta=0.5f0, gamma=0.5f0, tick=tick)
             rb = reference_material_tick!(B, g, NEWTONIAN, FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                beta=0.5f0, gamma=0.5f0, tick=tick)
             if melt_A === nothing && any(a -> a isa MeltAction && a.site_index == 1, ra.actions)
                 melt_A = tick
             end
@@ -338,26 +341,31 @@ end
         trajectory_B = Any[]
 
         for (tick, g1) in enumerate(gseq)
-            g = zeros(Float32, 64); g[1] = g1
+            g = zeros(Float32, 64)
+            g[1] = g1
             ra = reference_material_tick!(A, g, BinghamInspired(0.125f0),
-                                          FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                FIXED_RULE_CONTROLLER, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
             rb = reference_material_tick!(B, copy(g), BinghamInspired(0.125f0),
-                                          FIXED_RULE_CONTROLLER, ZCS();
-                                          beta=0.5f0, gamma=0.5f0, tick=tick)
+                FIXED_RULE_CONTROLLER, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
             saw_lifecycle_event = saw_lifecycle_event || any(a -> !(a isa NoAction), ra.actions)
 
             push!(trajectory_A, (state=substrate_fingerprint(A),
-                                 actions=action_fingerprint(ra.actions),
-                                 exposure=Tuple(ra.exposures),
-                                 delta=Tuple(bits(x) for x in ra.delta_updates)))
+                actions=action_fingerprint(ra.actions),
+                exposure=Tuple(ra.exposures),
+                delta=Tuple(bits(x) for x in ra.delta_updates)))
             push!(trajectory_B, (state=substrate_fingerprint(B),
-                                 actions=action_fingerprint(rb.actions),
-                                 exposure=Tuple(rb.exposures),
-                                 delta=Tuple(bits(x) for x in rb.delta_updates)))
+                actions=action_fingerprint(rb.actions),
+                exposure=Tuple(rb.exposures),
+                delta=Tuple(bits(x) for x in rb.delta_updates)))
         end
 
         @test saw_lifecycle_event
         @test trajectory_A == trajectory_B
     end
 end
+
+include("telemetry.jl")
+include("c3.jl")
+include("material_training.jl")

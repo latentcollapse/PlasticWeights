@@ -13,6 +13,9 @@ make_no_action() = NO_ACTION
 make_melt(site_index::Integer) = MeltAction(Int32(site_index))
 make_commit(site_index::Integer) = CommitAction(Int32(site_index))
 
+"""Concrete isbits union of all possible DCP lifecycle actions."""
+const LifecycleAction = Union{NoAction, MeltAction, CommitAction}
+
 function _checked_site_index(substrate::SubstrateState, site_index::Integer)::Int
     i = Int(site_index)
     1 <= i <= length(substrate.sites) || error("HardFailure: action site index $i out of bounds")
