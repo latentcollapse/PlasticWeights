@@ -53,6 +53,37 @@
 # contradiction is the thesis, not a pathology. No other rule changed.
 #
 # E1 unblocks only if C1, C2, C5 all pass and C3, C4, C6 hold.
+#
+# PREREGISTERED AMENDMENT 2 (E0c′ rerun for P5′, recorded before rerunning):
+# E0c failed only C3 (max mixed-learner mid-phase jump 1.674 > 1.0), with
+# attribution: the commit budget eliminated COORDINATED waves, but the
+# fixed-length 2-tick ramp releases ~δ/2 per tick, so per-tick exposed change
+# scales with ‖δ‖ (offender: one site invalidated early in B, ~148 ticks of
+# opposed load → O(1) delta → O(0.5)/tick steps). P5′ makes the ramp length
+# adaptive: at commit the site stores ramp_ticks = max(ramp_k, ceil(|δ|/m_max)),
+# bounding per-tick exposed change by m_max for EVERY commit.
+#   m_max = 0.02 — deliberately equal to the grid's epsilon_delta: a commit
+#   may not expose more per tick than the constitutive law may move per tick.
+#   (The exposure budget matches the plastic flow budget.)
+#
+# P5′ CANARY FINDING (recorded before the amended rerun): pure length-
+# adaptation made C3 WORSE (5.72). Attribution: (a) melt-mid-ramp reversion —
+# a long-ramp site invalidated at blend b snapped from w-(1-b)δ straight to w,
+# an unbounded jump, and the melt window is now ~150 ticks wide; (b) aggregate
+# drift — m_max bounds per-SITE change, not the network sum over dozens of
+# simultaneously-gliding sites (2 runaway points, correctly flagged).
+#
+# P5″ (as implemented and tested): EXPOSURE TRAJECTORY CONTINUITY. The site
+# persists (exposed_base, transition_start, ramp_ticks) and its visible value
+# follows ONE bounded-rate trajectory x(t) = base + (w-base)·b(t) toward w.
+# Lifecycle events REDIRECT the trajectory — commit and melt both stamp a new
+# transition from the CURRENTLY EXPOSED value (δ_eff = w - x_now), never
+# interrupt it. Per-tick exposed change is bounded by m_max for every event
+# at every distance, and invalidation no longer shocks at all. ZCS pins
+# plastic sites to 0 by policy (its fade-in applies at commit).
+# Criteria are UNCHANGED from the original E0c preregistration. This run is
+# authoritative for the C3 decision; the E0c grid remains the record for the
+# census-rule amendment.
 # ---------------------------------------------------------------------------
 
 using PlasticWeights
@@ -90,7 +121,7 @@ function run_point(law_name::Symbol, yield_up::Float32, eta::Float32,
     config = MaterialTrainingConfig(
         law=law,
         dcp=PHASE_MACHINE_CONTROLLER,   # P2/P3/P4 (k_commit = 2)
-        policy=RampedVPS(2),            # P1/P5
+        policy=RampedVPS(2; m_max=0.02f0),  # P1/P5 + P5′ (Amendment 2)
         head=AdamConfig(learning_rate=0.02f0),
         beta=0.5f0,
         gamma=0.5f0,
@@ -291,7 +322,7 @@ function main()
     mode = isempty(ARGS) ? :full : Symbol(ARGS[1])
 
     if mode === :report
-        path = length(ARGS) >= 2 ? ARGS[2] : joinpath("docs", "e0c_raw_output.txt")
+        path = length(ARGS) >= 2 ? ARGS[2] : joinpath("docs", "e0c_prime_raw_output.txt")
         rows = String[]
         for line in eachline(path)
             s = strip(line)
@@ -307,7 +338,7 @@ function main()
     end
 
     println("="^110)
-    println("E0c — phase-machine sweep (P1-P5 vs E0b2 residual defects), preregistered [mode=", mode, "]")
+    println("E0c′ — phase-machine sweep with P5″ trajectory continuity (Amendment 2), preregistered [mode=", mode, "]")
     println("="^110)
     header = @sprintf("%-8s %7s %6s %6s %7s | %7s %7s %7s %7s %7s %7s | %5s %5s %5s %6s %6s %6s %7s %s",
         "law", "yield", "eta", "settle", "hard",

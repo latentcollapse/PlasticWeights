@@ -20,6 +20,7 @@ export update_signed_stress_ema!, gradient_consistency
 export ternary_round
 export ExposurePolicy, ZCS, VPS, RampedZCS, RampedVPS
 export exposure, exposure_snapshot, commit_base, commit_blend
+export effective_ramp_ticks, adaptive_ramp_ticks, stamp_transition!
 export PhaseMachineController, PHASE_MACHINE_CONTROLLER
 export initialize_stage0_seed, initialize_consolidated_substrate
 export initialize_fp_seed, initialize_fp_consolidated_substrate

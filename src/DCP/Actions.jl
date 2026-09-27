@@ -26,7 +26,7 @@ function apply_action!(substrate::SubstrateState, ::NoAction, ::ExposurePolicy)
     return nothing
 end
 
-function apply_action!(substrate::SubstrateState, action::MeltAction, ::ExposurePolicy;
+function apply_action!(substrate::SubstrateState, action::MeltAction, policy::ExposurePolicy;
                        tick::Integer=0)
     i = _checked_site_index(substrate, action.site_index)
     site = substrate.sites[i]
@@ -36,6 +36,20 @@ function apply_action!(substrate::SubstrateState, action::MeltAction, ::Exposure
     current_superplastic = count(s -> s.allocated && s.superplastic, substrate.sites)
     current_superplastic < Int(substrate.max_superplastic) ||
         error("HardFailure: MELT would exceed global superplastic budget")
+
+    # P5″: capture the pre-melt VISIBLE value before mutation consumes it —
+    # the exposure trajectory will be REDIRECTED from here, not interrupted.
+    # (Pre-melt the site is committed: both policies expose w, or the glide
+    # value if a transition is still in flight.)
+    e0_melt = if site isa FPSiteState && policy isa Union{RampedVPS,RampedZCS}
+        if site.ramp_ticks > Int32(0) && site.transition_start != Int32(0)
+            transitioned_exposure(site, policy, tick)
+        else
+            site.w
+        end
+    else
+        Float32(0)
+    end
 
     # All checks precede the state mutation. Allocation initializes δ to zero.
     handle = allocate!(substrate.pool, 0.0f0)
@@ -50,6 +64,15 @@ function apply_action!(substrate::SubstrateState, action::MeltAction, ::Exposure
         site.plastic_since = Int32(tick)
         site.consolidation_tick = Int32(0)
         site.last_commit_delta = 0.0f0
+        if policy isa Union{RampedVPS,RampedZCS}
+            # P5″: the visible value keeps gliding to w at the policy's
+            # per-tick budget — invalidation no longer shocks.
+            stamp_transition!(site, e0_melt, policy, tick)
+        else
+            site.ramp_ticks = Int32(0)
+            site.exposed_base = 0.0f0
+            site.transition_start = Int32(0)
+        end
     end
     reset_lifecycle_counters!(substrate.telemetry[i])
     check_invariants(substrate)
@@ -81,6 +104,21 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
 
     # Commit is exposed only after this tick's immutable exposure snapshot has
     # already been consumed by the forward/backward path.
+    # P5″: capture the pre-commit VISIBLE value before mutation. Under ZCS a
+    # plastic site is pinned to 0 (policy, regardless of any in-flight glide);
+    # under VPS it exposes its trajectory value (or w if none is in flight).
+    e0_commit = if site isa FPSiteState && policy isa Union{RampedVPS,RampedZCS}
+        if policy isa RampedZCS && site.superplastic
+            0.0f0
+        elseif site.ramp_ticks > Int32(0) && site.transition_start != Int32(0)
+            transitioned_exposure(site, policy, tick)
+        else
+            site.w
+        end
+    else
+        Float32(0)
+    end
+
     release!(substrate.pool, old_handle)
     if site isa SiteState
         new_q = ternary_round(commit_base(site, policy) + delta)
@@ -111,6 +149,16 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
         site.last_commit_delta = delta
         site.commit_sign = new_sign
         site.commit_stress = telem.stress_ema
+        if policy isa Union{RampedVPS,RampedZCS}
+            # P5″: the trajectory continues from the pre-commit visible value
+            # toward the new w — continuity holds by construction, and the
+            # ramp length bounds the per-tick exposed change by m_max.
+            stamp_transition!(site, e0_commit, policy, tick)
+        else
+            site.ramp_ticks = Int32(0)
+            site.exposed_base = 0.0f0
+            site.transition_start = Int32(0)
+        end
     end
     reset_lifecycle_counters!(substrate.telemetry[i])
     region.yield_up += region.hardening_increment

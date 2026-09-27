@@ -56,39 +56,96 @@ _tpm_bits(x::Float32) = reinterpret(UInt32, x)
 end
 
 @testset "E0c — ramped exposure blending" begin
-    # Consolidated-at-tick-10 site with known delta.
+    # P5″ trajectory contract: exposure glides exposed_base → w over the
+    # stamped transition. Fixture: committed at tick 10, visible value was
+    # 0.2 (= w − δ with w=1.0, δ=0.8), transition length 2.
     site = FPSiteState(1.0f0, true, false, Int32(0);
                        last_commit_delta=0.8f0, commit_sign=1)
     site.consolidation_tick = 10
+    site.exposed_base = 0.2f0
+    site.transition_start = 10
+    site.ramp_ticks = 2
 
     # Commit tick itself: not yet visible (commit affects next tick).
     @test commit_blend(site, 2, 10) == 0.0f0
-    @test exposure(site, RampedVPS(2), 10) ≈ 0.2f0 atol=1e-7   # 1.0 - (1-0)*0.8
-    @test exposure(site, RampedZCS(2), 10) == 0.0f0
+    @test exposure(site, RampedVPS(2), 10) ≈ 0.2f0 atol=1e-7
+    @test exposure(site, RampedZCS(2), 10) ≈ 0.2f0 atol=1e-7  # ZCS glides too
 
     # Half-way through the ramp.
     @test commit_blend(site, 2, 11) == 0.5f0
-    @test exposure(site, RampedVPS(2), 11) ≈ 0.6f0 atol=1e-7   # 1.0 - 0.5*0.8
-    @test exposure(site, RampedZCS(2), 11) == 0.5f0
+    @test exposure(site, RampedVPS(2), 11) ≈ 0.6f0 atol=1e-7
+    @test exposure(site, RampedZCS(2), 11) ≈ 0.6f0 atol=1e-7
 
     # Ramp complete: full value under both policies.
     @test commit_blend(site, 2, 12) == 1.0f0
     @test exposure(site, RampedVPS(2), 12) == 1.0f0
     @test exposure(site, RampedZCS(2), 12) == 1.0f0
 
-    # ramp_k = 0 disables the ramp entirely.
-    @test exposure(site, RampedVPS(0), 10) == 1.0f0
+    # No transition record (unstamped hand-built site): fully visible — the
+    # conservative fallback for direct manipulation.
+    bare = FPSiteState(1.0f0, true, false, Int32(0);
+                       last_commit_delta=0.8f0, commit_sign=1)
+    @test exposure(bare, RampedVPS(2), 99) == 1.0f0
+    @test exposure(bare, RampedZCS(2), 99) == 1.0f0
+    @test commit_blend(bare, 4, 5) == 1.0f0
 
-    # Pre-existing consolidation (tick 0) is ramp-exempt: no re-shock.
-    legacy = FPSiteState(2.0f0, true, false, Int32(0); last_commit_delta=1.5f0)
-    @test commit_blend(legacy, 4, 5) == 1.0f0
-    @test exposure(legacy, RampedVPS(4), 5) == 2.0f0
+    # ramp_k = 0 disables new transitions entirely.
+    flat = FPSiteState(1.0f0, true, false, Int32(0))
+    flat.consolidation_tick = 10
+    flat.exposed_base = 0.2f0
+    flat.transition_start = 10
+    flat.ramp_ticks = 0
+    @test exposure(flat, RampedVPS(0), 10) == 1.0f0
 
-    # Superplastic sites are never ramped (their exposure policy already
-    # decides visibility: VPS shows w, ZCS shows 0).
-    hot = FPSiteState(1.0f0, true, true, Int32(1))
-    @test exposure(hot, RampedVPS(2), 7) == 1.0f0
-    @test exposure(hot, RampedZCS(2), 7) == 0.0f0
+    # Superplastic VPS with an in-flight transition rides the glide to w
+    # (P5″: melt no longer snaps exposure); ZCS still pins plastic sites to 0.
+    gliding = FPSiteState(1.0f0, true, true, Int32(1))
+    gliding.exposed_base = 0.2f0
+    gliding.transition_start = 7
+    gliding.ramp_ticks = 4
+    @test exposure(gliding, RampedVPS(2), 9) ≈ 0.6f0 atol=1e-7
+    @test exposure(gliding, RampedZCS(2), 9) == 0.0f0
+
+    # Unstamped committed sites keep the effective-length fallback contract.
+    @test effective_ramp_ticks(bare, RampedVPS(2)) == 2
+end
+
+@testset "E0c P5-prime — adaptive ramp bounds per-tick exposed change" begin
+    # Length selection: small deltas keep the fixed length; large deltas
+    # extend it to ceil(|δ|/m_max).
+    @test adaptive_ramp_ticks(0.04f0, 2, 0.05f0) == 2
+    @test adaptive_ramp_ticks(0.05f0, 2, 0.05f0) == 2   # ceil(1.0) = 1 < k
+    @test adaptive_ramp_ticks(0.11f0, 2, 0.05f0) == 3   # ceil(2.2)
+    @test adaptive_ramp_ticks(0.30f0, 2, 0.05f0) == 6
+
+    # A stamped commit with a large delta: ramp_ticks = 6 for |w − e0| = 0.3
+    # at m_max = 0.05, so the per-tick visible change is ~0.05, not δ/2 = 0.15.
+    site = FPSiteState(1.3f0, true, false, Int32(0);
+                       last_commit_delta=0.3f0, commit_sign=1)
+    site.consolidation_tick = 10
+    site.exposed_base = 1.0f0
+    site.transition_start = 10
+    site.ramp_ticks = 6
+    policy = RampedVPS(2; m_max=0.05f0)
+
+    @test effective_ramp_ticks(site, policy) == 6
+    e10 = exposure(site, policy, 10)
+    e13 = exposure(site, policy, 13)
+    e16 = exposure(site, policy, 16)
+    @test e10 ≈ 1.0f0 atol=1e-6          # transition start: still the old value
+    @test e13 ≈ 1.15f0 atol=1e-6         # halfway: +0.15 over 3 ticks
+    @test e16 == 1.3f0                   # ramp complete
+    @test (e13 - e10) / 3 ≈ 0.05f0 atol=1e-6   # the P5′ bound, honored
+
+    # ZCS gets the same treatment: fades in over the stored length.
+    z = FPSiteState(0.9f0, true, false, Int32(0); last_commit_delta=0.9f0)
+    z.consolidation_tick = 4
+    z.exposed_base = 0.0f0
+    z.transition_start = 4
+    z.ramp_ticks = 18
+    @test adaptive_ramp_ticks(0.9f0, 2, 0.05f0) == 18
+    @test exposure(z, RampedZCS(2; m_max=0.05f0), 13) ≈ 0.45f0 atol=1e-6
+    @test exposure(z, RampedZCS(2; m_max=0.05f0), 22) == 0.9f0
 
     # Tick-aware snapshots: ramped FP path stages; legacy path bit-identical.
     sub = initialize_fp_seed(64; region_size=64)
@@ -221,6 +278,9 @@ end
     @test sub.sites[1].commit_sign == Int8(1)
     @test sub.sites[1].consolidation_tick == committed_tick
     @test sub.sites[1].plastic_since == 0
+    # P5′: the commit stamped its own adaptive ramp length.
+    @test sub.sites[1].ramp_ticks ==
+          adaptive_ramp_ticks(abs(sub.sites[1].last_commit_delta), 2, 0.05f0)
 
     # Phase 2: sustained opposed load. conflict_k = 2 → reopen quickly.
     g_neg = fill(-0.05f0, 64)
@@ -235,6 +295,11 @@ end
     end
     @test reopened_tick > 0
     @test sub.sites[1].plastic_since == reopened_tick
+    # P5″: melt REDIRECTS the exposure trajectory instead of clearing it —
+    # the site keeps gliding to w at the policy's per-tick budget, so
+    # invalidation never shocks. A fresh bounded-rate transition is stamped.
+    @test sub.sites[1].ramp_ticks > 0
+    @test sub.sites[1].transition_start == reopened_tick
 
     # The re-melt only costs the site its open residual — the committed w
     # survives as the melt base (VPS), so invalidation is not amnesia.

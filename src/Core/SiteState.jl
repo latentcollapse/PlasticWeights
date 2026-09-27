@@ -71,6 +71,26 @@ plus the E0c symbolic phase record (Pass 2 of the gate-fix programme):
                            site consolidated under), because "sustained
                            disagreement" is a statement about the site's own
                            load regime, not about the region's yield.
+    ramp_ticks          -- length of the current exposure transition (E0c
+                           P5′/P5″): max(ramp_k, ceil(|δ_eff|/m_max)) where
+                           δ_eff is the remaining VISIBLE distance to w at
+                           stamp time. 0 = no transition in progress (also the
+                           unstamped/hand-built state, which falls back to the
+                           policy's fixed ramp_k). The record SURVIVES melt
+                           (P5″ trajectory continuity): lifecycle events
+                           redirect the exposure trajectory, never interrupt
+                           it.
+    exposed_base::Float32 -- visible value when the current transition started
+                           (P5″). With (transition_start, ramp_ticks) it fully
+                           determines the exposure trajectory
+                           x(t) = exposed_base + (w − exposed_base)·b(t),
+                           valid for BOTH phases: a plastic site glides from
+                           its pre-melt visible value to w at the melt; a
+                           committed site glides from its pre-commit value.
+                           0 when no transition is in flight (bit-0 sentinel,
+                           safe: real bases are generally nonzero).
+    transition_start::Int32 -- tick at which the current transition started.
+                           0 = none.
 
 The phase alphabet is deliberately two-symbol: Plastic ↔ Committed (plus
 Vacant). Dwell/hysteresis live in the telemetry counters and the controller;
@@ -88,6 +108,9 @@ mutable struct FPSiteState <: AbstractSiteState
     commit_sign::Int8
     plastic_since::Int32
     commit_stress::Float32
+    ramp_ticks::Int32
+    exposed_base::Float32
+    transition_start::Int32
 
     function FPSiteState(w::Real, allocated::Bool=false,
                          superplastic::Bool=false, hot_handle::Integer=0;
@@ -112,7 +135,8 @@ mutable struct FPSiteState <: AbstractSiteState
         consolidation_tick = Int32(0)
         plastic_since = superplastic ? Int32(0) : Int32(0)
         new(wf, allocated, superplastic, Int32(hot_handle), phase,
-            consolidation_tick, lcd, Int8(commit_sign), plastic_since, cs)
+            consolidation_tick, lcd, Int8(commit_sign), plastic_since, cs,
+            Int32(0), 0.0f0, Int32(0))
     end
 end
 
@@ -131,8 +155,11 @@ function check_invariants(site::FPSiteState)
     !site.superplastic && site.hot_handle != 0 && error("HardFailure: non-superplastic site owns hot handle $(site.hot_handle)")
     site.superplastic == (site.phase === :plastic) ||
         error("HardFailure: phase $(site.phase) inconsistent with superplastic=$(site.superplastic)")
-    site.superplastic && site.consolidation_tick != Int32(0) &&
-        error("HardFailure: plastic site carries consolidation tick $(site.consolidation_tick)")
+    # P5″: a plastic site may carry the PREVIOUS commit's record only while an
+    # exposure transition is in flight (ramp_ticks > 0) — the visible value is
+    # still gliding to w. A stale record without a transition is a bug.
+    site.superplastic && site.consolidation_tick != Int32(0) && site.ramp_ticks == Int32(0) &&
+        error("HardFailure: stale consolidation record on plastic site without transition")
     site.consolidation_tick >= Int32(0) ||
         error("HardFailure: negative consolidation tick $(site.consolidation_tick)")
     site.plastic_since >= Int32(0) ||
@@ -145,6 +172,16 @@ function check_invariants(site::FPSiteState)
         error("HardFailure: commit_sign must be in {-1,0,1}, got $(site.commit_sign)")
     isfinite(site.commit_stress) && site.commit_stress >= 0.0f0 ||
         error("HardFailure: commit_stress must be finite and >= 0, got $(site.commit_stress)")
+    site.ramp_ticks >= Int32(0) ||
+        error("HardFailure: negative ramp_ticks $(site.ramp_ticks)")
+    isfinite(site.exposed_base) ||
+        error("HardFailure: exposed_base must be finite, got $(site.exposed_base)")
+    site.transition_start >= Int32(0) ||
+        error("HardFailure: negative transition_start $(site.transition_start)")
+    # Transition record coherence: a transition needs both its length and its
+    # start; no transition means neither.
+    ((site.ramp_ticks > Int32(0)) == (site.transition_start > Int32(0))) ||
+        error("HardFailure: incoherent transition record (ramp_ticks=$(site.ramp_ticks), transition_start=$(site.transition_start))")
     return true
 end
 
