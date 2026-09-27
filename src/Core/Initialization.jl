@@ -15,7 +15,8 @@ end
 function _region_map(num_sites::Integer, region_size::Integer;
                      yield_up::Real, settle_down::Real, eta::Real,
                      hardening_increment::Real, epsilon_delta::Real,
-                     k_yield::Integer, k_settle::Integer)
+                     k_yield::Integer, k_settle::Integer,
+                     conflict_k::Integer=4)
     return RegionMap(num_sites, region_size;
         yield_up=yield_up,
         settle_down=settle_down,
@@ -23,7 +24,8 @@ function _region_map(num_sites::Integer, region_size::Integer;
         hardening_increment=hardening_increment,
         epsilon_delta=epsilon_delta,
         k_yield=k_yield,
-        k_settle=k_settle)
+        k_settle=k_settle,
+        conflict_k=conflict_k)
 end
 
 """
@@ -39,11 +41,13 @@ function initialize_stage0_seed(num_sites::Integer; region_size::Integer=64,
                                 hardening_increment::Real=0.05f0,
                                 epsilon_delta::Real=0.1f0,
                                 k_yield::Integer=3,
-                                k_settle::Integer=3)::SubstrateState
+                                k_settle::Integer=3,
+                                conflict_k::Integer=4)::SubstrateState
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
-        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle)
+        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
+        conflict_k=conflict_k)
     pool = HotPool(num_sites)
     sites = Vector{SiteState}(undef, num_sites)
     telemetry = [SiteTelemetry() for _ in 1:num_sites]
@@ -69,14 +73,16 @@ function initialize_consolidated_substrate(num_sites::Integer; region_size::Inte
                                            hardening_increment::Real=0.05f0,
                                            epsilon_delta::Real=0.1f0,
                                            k_yield::Integer=3,
-                                           k_settle::Integer=3)::SubstrateState
+                                           k_settle::Integer=3,
+                                conflict_k::Integer=4)::SubstrateState
     q in (-1, 0, 1) || error("HardFailure: q must be ternary")
     0 <= max_superplastic <= num_sites ||
         error("HardFailure: max_superplastic must be in 0:num_sites")
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
-        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle)
+        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
+        conflict_k=conflict_k)
     pool = HotPool(num_sites)
     sites = [SiteState(q, true, false, 0) for _ in 1:num_sites]
     telemetry = [SiteTelemetry() for _ in 1:num_sites]
@@ -100,11 +106,13 @@ function initialize_fp_seed(num_sites::Integer;
                             hardening_increment::Real=0.05f0,
                             epsilon_delta::Real=0.1f0,
                             k_yield::Integer=3,
-                            k_settle::Integer=3)::SubstrateState{FPSiteState}
+                            k_settle::Integer=3,
+                            conflict_k::Integer=4)::SubstrateState{FPSiteState}
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
-        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle)
+        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
+        conflict_k=conflict_k)
     pool = HotPool(num_sites)
     sites = Vector{FPSiteState}(undef, num_sites)
     telemetry = [SiteTelemetry() for _ in 1:num_sites]
@@ -133,13 +141,15 @@ function initialize_fp_consolidated_substrate(num_sites::Integer;
                                               hardening_increment::Real=0.05f0,
                                               epsilon_delta::Real=0.1f0,
                                               k_yield::Integer=3,
-                                              k_settle::Integer=3)::SubstrateState{FPSiteState}
+                                              k_settle::Integer=3,
+                                conflict_k::Integer=4)::SubstrateState{FPSiteState}
     0 <= max_superplastic <= num_sites ||
         error("HardFailure: max_superplastic must be in 0:num_sites")
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
-        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle)
+        epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
+        conflict_k=conflict_k)
     pool = HotPool(num_sites)
     w_init = initial_weights === nothing ? zeros(Float32, num_sites) : Float32.(initial_weights)
     length(w_init) == num_sites || error("HardFailure: initial_weights length mismatch")

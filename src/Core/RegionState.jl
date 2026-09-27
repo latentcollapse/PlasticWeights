@@ -15,6 +15,7 @@ mutable struct RegionState
     epsilon_delta::Float32
     k_yield::Int32
     k_settle::Int32
+    conflict_k::Int32
 
     function RegionState(id::Integer, site_indices::AbstractVector{<:Integer};
         yield_up::Real=0.5f0,
@@ -23,7 +24,8 @@ mutable struct RegionState
         hardening_increment::Real=0.05f0,
         epsilon_delta::Real=0.1f0,
         k_yield::Integer=3,
-        k_settle::Integer=3)
+        k_settle::Integer=3,
+        conflict_k::Integer=4)
         isempty(site_indices) &&
             error("HardFailure: region $id has no sites")
 
@@ -55,9 +57,10 @@ mutable struct RegionState
         ed > 0.0f0 || error("HardFailure: epsilon_delta must be > 0")
         k_yield >= 1 || error("HardFailure: k_yield must be >= 1")
         k_settle >= 1 || error("HardFailure: k_settle must be >= 1")
+        conflict_k >= 1 || error("HardFailure: conflict_k must be >= 1")
 
         new(Int32(id), idx, Int32(length(idx)), yu, sd, et, hi, ed,
-            Int32(k_yield), Int32(k_settle))
+            Int32(k_yield), Int32(k_settle), Int32(conflict_k))
     end
 end
 
@@ -80,7 +83,8 @@ struct RegionMap
         hardening_increment::Real=0.05f0,
         epsilon_delta::Real=0.1f0,
         k_yield::Integer=3,
-        k_settle::Integer=3)
+        k_settle::Integer=3,
+        conflict_k::Integer=4)
         num_sites > 0 || error("HardFailure: num_sites must be positive")
         64 <= region_size <= 256 ||
             error("HardFailure: Stage-0 region_size must be in 64:256, got $region_size")
@@ -102,7 +106,8 @@ struct RegionMap
                 hardening_increment=hardening_increment,
                 epsilon_delta=epsilon_delta,
                 k_yield=k_yield,
-                k_settle=k_settle)
+                k_settle=k_settle,
+                conflict_k=conflict_k)
             for i in indices
                 site_to_region[i] = Int32(r)
             end

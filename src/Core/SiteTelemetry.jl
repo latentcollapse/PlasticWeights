@@ -11,16 +11,19 @@ mutable struct SiteTelemetry
     residual_motion_ema::Float32
     consecutive_above_yield::Int32
     consecutive_stable::Int32
+    consecutive_conflicted::Int32
 
     function SiteTelemetry(stress_ema::Real=0.0,
                            residual_motion_ema::Real=0.0,
                            consecutive_above_yield::Integer=0,
                            consecutive_stable::Integer=0;
-                           signed_stress_ema::Real=NaN)
+                           signed_stress_ema::Real=NaN,
+                           consecutive_conflicted::Integer=0)
         stress_ema >= 0 || error("HardFailure: stress EMA cannot be negative")
         residual_motion_ema >= 0 || error("HardFailure: residual-motion EMA cannot be negative")
         consecutive_above_yield >= 0 || error("HardFailure: negative above-yield counter")
         consecutive_stable >= 0 || error("HardFailure: negative stable counter")
+        consecutive_conflicted >= 0 || error("HardFailure: negative conflict counter")
         # signed_stress_ema defaults to NaN ("unknown"): hand-constructed
         # telemetry that specifies only magnitudes is treated as fresh state
         # (consistency 0), not as a silently wrong directional statistic.
@@ -28,7 +31,8 @@ mutable struct SiteTelemetry
         ss = Float32(signed_stress_ema)
         isfinite(ss) || (ss = Float32(NaN32))
         new(Float32(stress_ema), ss, Float32(residual_motion_ema),
-            Int32(consecutive_above_yield), Int32(consecutive_stable))
+            Int32(consecutive_above_yield), Int32(consecutive_stable),
+            Int32(consecutive_conflicted))
     end
 end
 
@@ -111,8 +115,59 @@ function update_counters!(telemetry::SiteTelemetry, yield_up::Real,
     return nothing
 end
 
+"""
+Five-argument counter update (E0c): adds the conflict certificate.
+
+Conflict is measured against the site's consolidation reference, not the
+moving EMA: a committed site with reference (commit_sign s, commit_stress σ_c)
+is conflicted when it bears sustained, CONSISTENT load in the OPPOSITE
+direction, at magnitude at least CONFLICT_FLOOR × σ_c (and never below the
+tiny absolute epsilon floor, so noise cannot invalidate a site that
+consolidated under near-zero load). This is what "the world now disagrees,
+at comparable strength, with what this site consolidated under" means
+operationally — and unlike EMA self-reference, it survives the EMA
+zero-crossing that occurs when the network re-points.
+
+Requires the owning site's reference (commit_sign, commit_stress); committed
+sites without one (commit_sign == 0) can never be conflicted-certified.
+"""
+function update_counters!(telemetry::SiteTelemetry, yield_up::Real,
+                          settle_down::Real, epsilon_delta::Real,
+                          commit_sign::Integer, commit_stress::Real=0.0f0)
+    update_counters!(telemetry, yield_up, settle_down, epsilon_delta)
+
+    if commit_sign != 0
+        floor = max(CONFLICT_FLOOR * Float32(commit_stress), CONFLICT_MIN_FLOOR)
+        if gradient_consistency(telemetry) >= Float32(settle_down) &&
+           telemetry.stress_ema >= floor
+            opposite = sign(telemetry.signed_stress_ema) == -Int8(commit_sign)
+            if opposite
+                telemetry.consecutive_conflicted += Int32(1)
+                return nothing
+            end
+        end
+    end
+    telemetry.consecutive_conflicted = Int32(0)
+    return nothing
+end
+
+"""
+Fraction of the consolidating stress that sustained opposed load must reach
+before it counts toward the conflict certificate. Below this floor, small
+contrary drift cannot invalidate a consolidation record.
+"""
+const CONFLICT_FLOOR = 0.5f0
+
+"""
+Absolute lower bound on the conflict certificate's magnitude floor: a site
+that consolidated under (near-)zero load can only be invalidated by load that
+is at least meaningful at Stage-0 gradient scales.
+"""
+const CONFLICT_MIN_FLOOR = 1.0f-3
+
 function reset_lifecycle_counters!(telemetry::SiteTelemetry)
     telemetry.consecutive_above_yield = Int32(0)
     telemetry.consecutive_stable = Int32(0)
+    telemetry.consecutive_conflicted = Int32(0)
     return nothing
 end

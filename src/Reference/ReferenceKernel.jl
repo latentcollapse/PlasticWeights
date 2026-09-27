@@ -38,7 +38,9 @@ function reference_material_tick!(substrate::SubstrateState,
     length(gradients) == n || error("HardFailure: gradient/site length mismatch")
 
     # Step 1: immutable exposure snapshot retained through the entire tick.
-    exposures = exposure_snapshot(substrate.sites, policy)
+    # Tick-aware overload (E0c): ramped policies stage commit visibility;
+    # legacy policies ignore the tick (bit-identical to the frozen 2-arg path).
+    exposures = exposure_snapshot(substrate.sites, policy, tick)
     recorder === nothing || record_wake!(recorder, tick, exposures)
 
     # Steps 6–9: stress, constitutive response, residual integration, motion EMA.
@@ -60,12 +62,26 @@ function reference_material_tick!(substrate::SubstrateState,
 
         delta_updates[i] = delta_delta
         update_residual_motion_ema!(telem, delta_delta, gamma)
-        update_counters!(
-            telem,
-            region.yield_up,
-            region.settle_down,
-            region.epsilon_delta,
-        )
+        # E0c: the conflict certificate needs the site's consolidation
+        # reference; ternary sites have none and pass defaults (never
+        # conflicted).
+        if site isa FPSiteState
+            update_counters!(
+                telem,
+                region.yield_up,
+                region.settle_down,
+                region.epsilon_delta,
+                site.commit_sign,
+                site.commit_stress,
+            )
+        else
+            update_counters!(
+                telem,
+                region.yield_up,
+                region.settle_down,
+                region.epsilon_delta,
+            )
+        end
     end
 
     recorder === nothing || record_first_delta!(recorder, tick, delta_updates)
@@ -86,6 +102,14 @@ function reference_material_tick!(substrate::SubstrateState,
 
     free_now = available_count(substrate.pool)
 
+    # E0c commit budget: at most one COMMIT per tick UNDER THE PHASE MACHINE.
+    # The E0b2 residual shock was a coordinated re-commit wave; a per-tick
+    # budget turns any wave into a bounded-rate stream. Sites not admitted this
+    # tick keep their counters (settle is persistent), so they are admitted on
+    # following ticks. The frozen FixedRuleController path is exempt: its
+    # batch-commit behavior is part of the frozen reference contract.
+    commit_budget = dcp isa PhaseMachineController ? 1 : typemax(Int)
+
     for i in eachindex(substrate.sites)
         site = substrate.sites[i]
         region = get_region_for_site(substrate.region_map, i)
@@ -104,8 +128,12 @@ function reference_material_tick!(substrate::SubstrateState,
         )
 
         action = decide(dcp, snapshot)
+        if action isa CommitAction && commit_budget <= 0
+            action = NO_ACTION
+        end
         actions[i] = action
         action isa MeltAction && (reserved_melts += 1)
+        action isa CommitAction && (commit_budget -= 1)
     end
 
     # Steps 12–14: atomic lifecycle application in canonical logical site order.
@@ -113,14 +141,29 @@ function reference_material_tick!(substrate::SubstrateState,
     # Telemetry observes the same already-decided action immediately before and
     # after application. It has no authority over whether the action occurs.
     for action in actions
+        action isa NoAction && continue
+
         pending = recorder === nothing ? nothing :
                   observe_action_before(substrate, action, policy)
 
-        apply_action!(substrate, action, policy)
+        # apply_action! is the single authority for lifecycle transitions; the
+        # E0c phase-record stamps (phase, consolidation_tick, plastic_since,
+        # consolidation reference) are part of the transition itself.
+        apply_action!(substrate, action, policy; tick=tick)
+
+        # A fired transition resets the conflict certificate: the site's
+        # reference is fresh (commit) or void (melt reopens the residual).
+        substrate.telemetry[Int(action.site_index)].consecutive_conflicted = Int32(0)
 
         recorder === nothing ||
             record_action_after!(recorder, tick, pending, substrate)
     end
+
+    # E0c note on liveness: the all-committed absorbing state is LEGAL under
+    # the phase machine (a stationary task legitimately converges there).
+    # Liveness is guaranteed dynamically, not by an invariant: opposed load
+    # fires the conflict certificate (mandatory invalidation) and above-yield
+    # load fires melts, so capacity to reopen always exists.
 
     check_invariants(substrate)
 

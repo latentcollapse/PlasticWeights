@@ -26,7 +26,8 @@ function apply_action!(substrate::SubstrateState, ::NoAction, ::ExposurePolicy)
     return nothing
 end
 
-function apply_action!(substrate::SubstrateState, action::MeltAction, ::ExposurePolicy)
+function apply_action!(substrate::SubstrateState, action::MeltAction, ::ExposurePolicy;
+                       tick::Integer=0)
     i = _checked_site_index(substrate, action.site_index)
     site = substrate.sites[i]
     site.allocated && !site.superplastic ||
@@ -40,13 +41,24 @@ function apply_action!(substrate::SubstrateState, action::MeltAction, ::Exposure
     handle = allocate!(substrate.pool, 0.0f0)
     site.superplastic = true
     site.hot_handle = handle
+
+    # E0c: symbolic phase transition Committed -> Plastic (single authority).
+    # tick == 0 means "unstamped" (direct manipulation without a tick);
+    # the reference kernel always passes the real tick.
+    if site isa FPSiteState
+        site.phase = :plastic
+        site.plastic_since = Int32(tick)
+        site.consolidation_tick = Int32(0)
+        site.last_commit_delta = 0.0f0
+    end
     reset_lifecycle_counters!(substrate.telemetry[i])
     check_invariants(substrate)
     return nothing
 end
 
 function apply_action!(substrate::SubstrateState, action::CommitAction,
-                       policy::ExposurePolicy)
+                       policy::ExposurePolicy;
+                       tick::Integer=0)
     i = _checked_site_index(substrate, action.site_index)
     site = substrate.sites[i]
     site.allocated && site.superplastic ||
@@ -81,6 +93,25 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
     end
     site.superplastic = false
     site.hot_handle = Int32(0)
+
+    # E0c: symbolic phase transition Plastic -> Committed (single authority).
+    # The consolidation reference (sign + stress) is recorded from the
+    # telemetry this commit closes under; tick == 0 means unstamped.
+    if site isa FPSiteState
+        telem = substrate.telemetry[i]
+        raw = telem.signed_stress_ema
+        # If the commit happened at (numerically) zero or unknown load, keep
+        # the previous reference — a site that re-commits during a quiet
+        # window has not declared a new direction.
+        new_sign = !isfinite(raw) || raw == 0.0f0 ? site.commit_sign :
+                   (raw > 0.0f0 ? Int8(1) : Int8(-1))
+        site.phase = :committed
+        site.consolidation_tick = Int32(tick)
+        site.plastic_since = Int32(0)
+        site.last_commit_delta = delta
+        site.commit_sign = new_sign
+        site.commit_stress = telem.stress_ema
+    end
     reset_lifecycle_counters!(substrate.telemetry[i])
     region.yield_up += region.hardening_increment
     check_invariants(substrate)

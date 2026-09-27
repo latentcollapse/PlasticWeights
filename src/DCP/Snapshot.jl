@@ -61,6 +61,12 @@ struct FPSnapshot <: AbstractSnapshot
     epsilon_delta::Float32
     melt_budget_available::Bool
     tick::Int32
+    conflict_k::Int32
+    consecutive_conflicted::Int32
+    consolidation_tick::Int32
+    commit_sign::Int8
+    plastic_since::Int32
+    commit_stress::Float32
 
     function FPSnapshot(site_index::Integer, w::Real,
                         allocated::Bool, superplastic::Bool,
@@ -69,14 +75,25 @@ struct FPSnapshot <: AbstractSnapshot
                         yield_up::Real, settle_down::Real,
                         k_yield::Integer, k_settle::Integer,
                         epsilon_delta::Real, melt_budget_available::Bool,
-                        tick::Integer)
+                        tick::Integer;
+                        conflict_k::Integer=1,
+                        consecutive_conflicted::Integer=0,
+                        consolidation_tick::Integer=0,
+                        commit_sign::Integer=0,
+                        plastic_since::Integer=0,
+                        commit_stress::Real=0.0)
         wf = Float32(w)
         isfinite(wf) || error("HardFailure: snapshot w must be finite, got $wf")
+        commit_sign in (-1, 0, 1) ||
+            error("HardFailure: snapshot commit_sign must be in {-1,0,1}")
         new(Int32(site_index), wf, allocated, superplastic,
             Float32(stress_ema), Float32(residual_motion_ema),
             Int32(consecutive_above_yield), Int32(consecutive_stable),
             Float32(yield_up), Float32(settle_down), Int32(k_yield), Int32(k_settle),
-            Float32(epsilon_delta), melt_budget_available, Int32(tick))
+            Float32(epsilon_delta), melt_budget_available, Int32(tick),
+            Int32(conflict_k), Int32(consecutive_conflicted),
+            Int32(consolidation_tick), Int8(commit_sign), Int32(plastic_since),
+            Float32(commit_stress))
     end
 end
 
@@ -97,5 +114,11 @@ function create_snapshot(site_index::Integer, region::RegionState,
         telemetry.stress_ema, telemetry.residual_motion_ema,
         telemetry.consecutive_above_yield, telemetry.consecutive_stable,
         region.yield_up, region.settle_down, region.k_yield, region.k_settle,
-        region.epsilon_delta, melt_budget_available, tick)
+        region.epsilon_delta, melt_budget_available, tick;
+        conflict_k=region.conflict_k,
+        consecutive_conflicted=telemetry.consecutive_conflicted,
+        consolidation_tick=site.consolidation_tick,
+        commit_sign=site.commit_sign,
+        plastic_since=site.plastic_since,
+        commit_stress=site.commit_stress)
 end

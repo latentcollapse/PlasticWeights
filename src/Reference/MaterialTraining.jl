@@ -184,6 +184,20 @@ function material_predict(
     return forward(mlp, X, exposures).y
 end
 
+"""Tick-aware read-only prediction (E0c): ramped policies report staged
+visibility at `tick`; legacy policies ignore the tick."""
+function material_predict(
+    mlp::Stage0MLP,
+    state::MaterialTrainingState,
+    X::AbstractMatrix{<:Real},
+    policy::ExposurePolicy,
+    tick::Integer,
+)
+    check_invariants(state, mlp)
+    exposures = exposure_snapshot(state.substrate.sites, policy, tick)
+    return forward(mlp, X, exposures).y
+end
+
 function material_predict(
     mlp::Stage0MLP,
     state::MaterialTrainingState,
@@ -240,10 +254,13 @@ function material_training_step!(
     next_tick > 0 ||
         error("HardFailure: material training step overflow")
 
-    # Step 1: this exact snapshot is consumed by forward/backward.
+    # Step 1: this exact snapshot is consumed by forward/backward. Tick-aware
+    # overload (E0c): ramped policies stage commit visibility by tick; legacy
+    # policies ignore the tick and return the frozen 2-arg result.
     exposures = exposure_snapshot(
         state.substrate.sites,
         config.policy,
+        state.step + 1,
     )
 
     recorder === nothing ||
@@ -301,9 +318,12 @@ function material_training_step!(
     state.step = next_tick
     check_invariants(state, mlp)
 
+    # What the NEXT tick's immutable snapshot will expose (E0c: tick-aware so
+    # ramped policies report the staged visibility, not the final value).
     next_exposures = exposure_snapshot(
         state.substrate.sites,
         config.policy,
+        state.step + 1,
     )
 
     return (

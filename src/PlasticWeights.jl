@@ -18,7 +18,9 @@ export num_allocated, available_count, has_capacity, is_valid_handle
 export update_stress_ema!, update_residual_motion_ema!, update_counters!, reset_lifecycle_counters!
 export update_signed_stress_ema!, gradient_consistency
 export ternary_round
-export ExposurePolicy, ZCS, VPS, exposure, exposure_snapshot, commit_base
+export ExposurePolicy, ZCS, VPS, RampedZCS, RampedVPS
+export exposure, exposure_snapshot, commit_base, commit_blend
+export PhaseMachineController, PHASE_MACHINE_CONTROLLER
 export initialize_stage0_seed, initialize_consolidated_substrate
 export initialize_fp_seed, initialize_fp_consolidated_substrate
 
