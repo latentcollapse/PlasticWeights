@@ -1,0 +1,37 @@
+==============================================================================================================
+E1 — four-arm comparison on extended multi-task stream (A→B→A→C→B→A→C→A), preregistered [mode=full]
+==============================================================================================================
+
+--- ARM_SUB (frozen E0c-prime parameterization) ---
+sub      | phaseFinal= 0.0065 retMean= 0.8642 retLast= 0.9938 | midJump= 0.747 | gainA=+0.3457 gainB=+1.0698 gainC=-0.0038 | hotMean= 0.27 hotEnd= 0.00
+         entries: A=[p1:0.333, p3:1.334, p6:1.323, p8:0.654] B=[p2:1.737, p5:0.667] C=[p4:0.667, p7:0.671] 
+
+--- ARM_C3 (frozen shadow-ternary control) ---
+c3       | phaseFinal= 0.1379 retMean= 0.5972 retLast= 0.9993 | midJump= 0.119 | gainA=-0.6666 gainB=-0.4938 gainC=-0.3337 | hotMean=  NaN hotEnd=  NaN
+         entries: A=[p1:0.333, p3:0.333, p6:1.333, p8:0.666] B=[p2:0.333, p5:0.827] C=[p4:0.333, p7:0.667] 
+
+--- ARM_FP32 (material-lr sweep, best kept) ---
+  lr= 0.001 phaseFinal= 0.0000 retMean= 0.8711
+  lr= 0.003 phaseFinal= 0.0000 retMean= 0.9077
+  lr= 0.010 phaseFinal= 0.0000 retMean= 0.9320
+  lr= 0.030 phaseFinal= 0.0000 retMean= 0.9409
+  lr= 0.100 phaseFinal= 0.0000 retMean= 0.9107
+  lr= 0.300 phaseFinal= 0.0000 retMean= 0.9278
+fp32     | phaseFinal= 0.0000 retMean= 0.9320 retLast= 0.9999 | midJump= 0.353 | gainA=+0.3327 gainB=+0.6660 gainC=-0.0001 | hotMean=  NaN hotEnd=  NaN
+         entries: A=[p1:0.333, p3:1.333, p6:1.334, p8:0.667] B=[p2:1.333, p5:0.667] C=[p4:0.667, p7:0.667] 
+
+--- ARM_FIXED (controller ablation: substrate minus phase machine) ---
+fixed    | phaseFinal= 0.0008 retMean= 0.8948 retLast= 1.0000 | midJump= 0.672 | gainA=+0.3331 gainB=+0.7020 gainC=-0.0004 | hotMean= 0.09 hotEnd= 0.00
+         entries: A=[p1:0.333, p3:1.333, p6:1.334, p8:0.666] B=[p2:1.369, p5:0.667] C=[p4:0.666, p7:0.667] 
+
+==============================================================================================================
+PREREGISTERED HYPOTHESIS CHECKS
+==============================================================================================================
+H1 adaptation:  SUB 0.0065 >  min(C3 0.1379, FP32 0.0000) = 0.0000  [FAIL]
+H2 retention:   SUB 0.8642 >= min(C3 0.5972, FP32 0.9320) = 0.5972  [FAIL]
+H3 history:     SUB gainA=+0.3457 [PASS]; SUB vs FIXED: +0.3457 vs +0.3331 [PASS]
+H4 stability:   SUB midJump=0.7473  [PASS]
+H5 locality:    SUB hotMean=0.265  [PASS]
+
+Controller-ablation deltas (SUB − FIXED):
+  phaseFinal +0.0057  retMean -0.0306  gainA +0.0126
