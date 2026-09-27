@@ -45,7 +45,11 @@ mutable struct RegionState
         ed = Float32(epsilon_delta)
 
         sd >= 0.0f0 || error("HardFailure: settle_down must be >= 0")
-        yu > sd || error("HardFailure: yield_up must exceed settle_down")
+        # D1 fix (E0 report §8.1): settle_down is a gradient-consistency
+        # threshold, not a stress magnitude. c <= 1 always, so a threshold of 1
+        # would be unreachable (deadlock by construction).
+        sd < 1.0f0 || error("HardFailure: settle_down is a consistency threshold and must be < 1")
+        yu > 0.0f0 || error("HardFailure: yield_up must be > 0")
         et > 0.0f0 || error("HardFailure: eta must be > 0")
         hi > 0.0f0 || error("HardFailure: hardening_increment must be > 0")
         ed > 0.0f0 || error("HardFailure: epsilon_delta must be > 0")

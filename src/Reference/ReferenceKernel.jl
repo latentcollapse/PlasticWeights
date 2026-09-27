@@ -50,6 +50,7 @@ function reference_material_tick!(substrate::SubstrateState,
         g = Float32(gradients[i])
 
         update_stress_ema!(telem, g, beta)
+        update_signed_stress_ema!(telem, g, beta)
 
         delta_delta = 0.0f0
         if site.allocated && site.superplastic

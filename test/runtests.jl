@@ -10,7 +10,8 @@ end
 function substrate_fingerprint(s::SubstrateState)
     sites = Tuple((site.q, site.allocated, site.superplastic, site.hot_handle)
                   for site in s.sites)
-    telemetry = Tuple((bits(t.stress_ema), bits(t.residual_motion_ema),
+    telemetry = Tuple((bits(t.stress_ema), bits(t.signed_stress_ema),
+        bits(t.residual_motion_ema),
         t.consecutive_above_yield, t.consecutive_stable)
                       for t in s.telemetry)
     regions = Tuple((r.id, Tuple(r.site_indices), r.region_size,
@@ -31,7 +32,8 @@ function xop_fingerprint_without_yield(s::SubstrateState)
     sites = Tuple((site.q, site.allocated, site.superplastic, site.hot_handle,
         site.superplastic ? bits(get_residual(s.pool, site.hot_handle)) : nothing)
                   for site in s.sites)
-    telemetry = Tuple((bits(t.stress_ema), bits(t.residual_motion_ema),
+    telemetry = Tuple((bits(t.stress_ema), bits(t.signed_stress_ema),
+        bits(t.residual_motion_ema),
         t.consecutive_above_yield, t.consecutive_stable)
                       for t in s.telemetry)
     region_nonhistory = Tuple((r.id, Tuple(r.site_indices), r.region_size,
@@ -167,14 +169,78 @@ end
     end
 
     @testset "S1 — Bingham-inspired law sanity" begin
+        # D2 fix (E0 report §8.2): mobility m = (σ+ε)/(σ+ε+τ·(1-c)) shapes flow
+        # and never hard-vetoes it. Fresh telemetry (signed EMA unknown) has
+        # c = 0, i.e. maximal conflict throttling — the conservative default.
         region = RegionState(1, 1:64; yield_up=0.5f0, settle_down=0.25f0,
             eta=1.0f0, hardening_increment=0.125f0)
         law = BinghamInspired(0.125f0)
-        low = SiteTelemetry(0.25f0)
-        high = SiteTelemetry(1.0f0)
-        @test response(law, region, low, 1.0f0) === 0.0f0
-        expected_m = 1.0f0 - 0.5f0 / 1.125f0
-        @test response(law, region, high, 1.0f0) ≈ -expected_m atol = 1.0f-6
+        low = SiteTelemetry(0.25f0)   # σ=0.25, c=0: m = 0.375/0.875
+        high = SiteTelemetry(1.0f0)   # σ=1.0,  c=0: m = 1.125/1.625
+        @test response(law, region, low, 1.0f0) ≈
+              -(1.0f0 / 1.0f0) * (0.25f0 + 0.125f0) / (0.25f0 + 0.125f0 + 0.5f0) atol = 1.0f-6
+        @test response(law, region, high, 1.0f0) ≈
+              -(1.0f0 / 1.0f0) * (1.125f0 / 1.625f0) atol = 1.0f-6
+
+        # Conflict-free telemetry (c=1): yield never throttles aligned flow.
+        aligned = SiteTelemetry(1.0f0; signed_stress_ema=1.0f0)
+        @test response(law, region, aligned, 1.0f0) === -1.0f0
+
+        # Scale covariance: doubling (g, ε, τ, η) jointly leaves Δδ invariant
+        # (the S1b loss-scale covariance contract, law-level form).
+        region2 = RegionState(1, 1:64; yield_up=1.0f0, settle_down=0.25f0,
+            eta=2.0f0, hardening_increment=0.125f0)
+        law2 = BinghamInspired(0.25f0)
+        high2 = SiteTelemetry(2.0f0)
+        @test response(law2, region2, high2, 2.0f0) ≈
+              response(law, region, high, 1.0f0) atol = 1.0f-6
+    end
+
+    @testset "S1 — gradient-consistency settle certificate (D1)" begin
+        t = SiteTelemetry()
+        @test !isfinite(t.signed_stress_ema)
+        @test gradient_consistency(t) == 0.0f0
+
+        # Consistent signed stream: c = 1 bit-exactly from the first tick
+        # (signed EMA shares the magnitude EMA's first-step convention).
+        update_stress_ema!(t, 0.5f0, 0.5f0)
+        update_signed_stress_ema!(t, 0.5f0, 0.5f0)
+        @test gradient_consistency(t) == 1.0f0
+        update_stress_ema!(t, 0.5f0, 0.5f0)
+        update_signed_stress_ema!(t, 0.5f0, 0.5f0)
+        update_stress_ema!(t, 0.5f0, 0.5f0)
+        update_signed_stress_ema!(t, 0.5f0, 0.5f0)
+        @test gradient_consistency(t) == 1.0f0
+
+        # One sign flip (conflict regime): c collapses.
+        update_stress_ema!(t, -0.5f0, 0.5f0)
+        update_signed_stress_ema!(t, -0.5f0, 0.5f0)
+        @test gradient_consistency(t) < 0.25f0
+
+        # Exact-zero rest decays both EMAs geometrically: c is preserved
+        # (rest is "quiet", not "conflicted"), and fresh 0/0 rest certifies 0.
+        t2 = SiteTelemetry()
+        update_stress_ema!(t2, 1.0f0, 0.5f0)
+        update_signed_stress_ema!(t2, 1.0f0, 0.5f0)
+        for _ in 1:20
+            update_stress_ema!(t2, 0.0f0, 0.5f0)
+            update_signed_stress_ema!(t2, 0.0f0, 0.5f0)
+        end
+        @test gradient_consistency(t2) == 1.0f0
+
+        t3 = SiteTelemetry()
+        update_counters!(t3, 0.5f0, 0.25f0, 0.05f0)
+        @test t3.consecutive_stable == 0
+
+        # Settle semantics: small-but-consistent gradients certify stability
+        # while magnitude is irrelevant (the E0 D1 defect in reverse).
+        t4 = SiteTelemetry()
+        update_stress_ema!(t4, 0.01f0, 0.5f0)
+        update_signed_stress_ema!(t4, 0.01f0, 0.5f0)
+        update_residual_motion_ema!(t4, 0.001f0, 0.5f0)
+        update_counters!(t4, 0.5f0, 0.25f0, 0.05f0)
+        @test t4.consecutive_stable == 1
+        @test t4.stress_ema > 0.0f0
     end
 
     @testset "S1b — loss-scale covariance" begin
@@ -192,7 +258,11 @@ end
         law_scaled = BinghamInspired(0.25f0)
 
         # This sequence exercises HOLD -> MELT -> deformation -> COMMIT.
-        gseq = Float32[1, 1, 1, 1, 0, 0, 0, 0, 0]
+        # D1 fix: trailing exact-zero rest can no longer certify stability
+        # (consistency 0/0), so the COMMIT leg runs on a small consistent load
+        # instead — the converged-learning regime, not rest. The k=2 scaling
+        # keeps the two substrates exactly k-covariant tick for tick.
+        gseq = Float32[1, 1, 1, 1, 0.01, 0.01, 0.01, 0.01, 0.01]
         saw_melt = false
         saw_commit = false
 
@@ -224,6 +294,7 @@ end
             for i in eachindex(base.telemetry)
                 tb, ts = base.telemetry[i], scaled.telemetry[i]
                 @test ts.stress_ema === k * tb.stress_ema
+                @test ts.signed_stress_ema === k * tb.signed_stress_ema
                 @test ts.residual_motion_ema === tb.residual_motion_ema
                 @test ts.consecutive_above_yield == tb.consecutive_above_yield
                 @test ts.consecutive_stable == tb.consecutive_stable

@@ -58,6 +58,15 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
     old_handle = site.hot_handle
     region = get_region_for_site(substrate.region_map, i)
 
+    # D1 fix (E0 report §8.1): commit-side hysteresis is now the melt margin —
+    # a commit must land where MELT would not be legal for this site
+    # (stress_ema strictly below yield_up). The legacy guard
+    # (yield_up > settle_down) assumed settle_down was a stress magnitude;
+    # settle_down is now a gradient-consistency threshold, independent of
+    # yield_up. All checks precede mutation.
+    region.yield_up > substrate.telemetry[i].stress_ema ||
+        error("HardFailure: COMMIT without melt margin (stress_ema >= yield_up)")
+
     # Commit is exposed only after this tick's immutable exposure snapshot has
     # already been consumed by the forward/backward path.
     release!(substrate.pool, old_handle)
@@ -74,9 +83,6 @@ function apply_action!(substrate::SubstrateState, action::CommitAction,
     site.hot_handle = Int32(0)
     reset_lifecycle_counters!(substrate.telemetry[i])
     region.yield_up += region.hardening_increment
-
-    region.yield_up > region.settle_down ||
-        error("HardFailure: hardening violated yield/settle hysteresis")
     check_invariants(substrate)
     return nothing
 end

@@ -13,6 +13,7 @@ function _mt_substrate_fingerprint(s::SubstrateState)
     telemetry = Tuple(
         (
             _mt_bits(t.stress_ema),
+            _mt_bits(t.signed_stress_ema),
             _mt_bits(t.residual_motion_ema),
             t.consecutive_above_yield,
             t.consecutive_stable,
@@ -91,15 +92,17 @@ function _fast_commit_material_state(
     mlp::Stage0MLP,
 )
     # This fixture deliberately makes the *lifecycle timing* easy to test:
-    # stress is far below settle_down, residual movement is well below
-    # epsilon_delta, and k_settle=2. Thus the all-star seed commits on tick 2.
+    # settle_down = 0.0 makes the consistency certificate vacuously true
+    # (D1 semantics: settle_down is a gradient-consistency threshold), residual
+    # movement is far below epsilon_delta, and k_settle=2. Thus the all-star
+    # seed commits on tick 2.
     #
     # It is a test fixture, not the primary experiment hyperparameter set.
     return initialize_material_training(
         mlp;
         region_size=64,
         yield_up=100.0f0,
-        settle_down=50.0f0,
+        settle_down=0.0f0,
         eta=0.01f0,
         hardening_increment=0.05f0,
         epsilon_delta=1.0f6,

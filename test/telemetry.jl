@@ -16,6 +16,7 @@ function _telemetry_substrate_fingerprint(s::SubstrateState)
     telemetry = Tuple(
         (
             _tbits(t.stress_ema),
+            _tbits(t.signed_stress_ema),
             _tbits(t.residual_motion_ema),
             t.consecutive_above_yield,
             t.consecutive_stable,
@@ -235,9 +236,14 @@ end
     @test commit_count(event_trace(recorder)) == 0
     @test wake_tick(event_trace(recorder)) === nothing
 
+    # D1 fix (E0 report §8.1): exact-zero rest certifies consistency 0 and can
+    # never settle — the rest-tick commit wave this test used to encode is the
+    # anti-causal behavior the fix removed. The commit wave is now driven by a
+    # small CONSISTENT load (the converged-learning regime the certificate was
+    # designed to recognize); every downstream expectation is unchanged.
     reference_material_tick!(
         substrate,
-        zeros(Float32, 64),
+        fill(-0.01f0, 64),
         NEWTONIAN,
         FIXED_RULE_CONTROLLER,
         ZCS();

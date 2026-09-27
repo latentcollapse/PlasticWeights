@@ -7,7 +7,8 @@ _fp_bits(x::Float32) = reinterpret(UInt32, x)
 function _fp_substrate_fingerprint(s::SubstrateState{FPSiteState})
     sites = Tuple((_fp_bits(site.w), site.allocated, site.superplastic, site.hot_handle)
                   for site in s.sites)
-    telemetry = Tuple((_fp_bits(t.stress_ema), _fp_bits(t.residual_motion_ema),
+    telemetry = Tuple((_fp_bits(t.stress_ema), _fp_bits(t.signed_stress_ema),
+        _fp_bits(t.residual_motion_ema),
         t.consecutive_above_yield, t.consecutive_stable)
                       for t in s.telemetry)
     regions = Tuple((r.id, Tuple(r.site_indices), r.region_size,
@@ -96,17 +97,26 @@ end
 
         law = BinghamInspired(1.0f-6)
 
-        # 1. Stress below yield: mobility is identically 0.0f0
+        # D2 fix (E0 report §8.2): mobility shapes flow and never hard-vetoes
+        # it. Fresh telemetry has c = 0 (maximal conflict throttling), so flow
+        # below yield is throttled to m = (σ+ε)/(σ+ε+τ) but strictly positive.
         telemetry.stress_ema = 0.3f0
-        @test response(law, region, telemetry, 1.0f0) == 0.0f0
-        @test response(law, region, telemetry, -5.0f0) == 0.0f0
+        m_throttled = (0.3f0 + 1.0f-6) / (0.3f0 + 1.0f-6 + 0.5f0)
+        @test response(law, region, telemetry, 1.0f0) ≈
+              -(1.0f0 / 2.0f0) * m_throttled atol = 1e-6
+        @test response(law, region, telemetry, 1.0f0) != 0.0f0
 
-        # 2. Stress above yield: Bingham plastic flow occurs
+        # Conflict-free telemetry (c = 1): yield never throttles aligned flow.
+        telemetry.signed_stress_ema = 0.3f0
+        @test response(law, region, telemetry, 1.0f0) ≈ -0.5f0 atol = 1e-6
+
+        # Legacy-regime golden value (σ above yield, conflict-free):
+        # mobility = 1, Δδ = -(g / eta) = -(1.0 / 2.0) = -0.5f0
+        # (the legacy value -0.25 included the old law's m = 0.5 factor)
         telemetry.stress_ema = 1.0f0
-        # mobility = max(0, 1 - 0.5 / 1.0) = 0.5
-        # Δδ = -(g / eta) * mobility = -(1.0 / 2.0) * 0.5 = -0.25f0
+        telemetry.signed_stress_ema = 1.0f0
         delta = response(law, region, telemetry, 1.0f0)
-        @test isapprox(delta, -0.25f0; atol=1e-5)
+        @test isapprox(delta, -0.5f0; atol=1e-5)
     end
 
     @testset "S3-FP — zero quantization cycle loss and work-hardening" begin
@@ -136,22 +146,31 @@ end
         # Injected residual: let's directly integrate a precise continuous value
         target_delta = 0.42857f0
         set_residual!(substrate.pool, substrate.sites[1].hot_handle, target_delta)
-        # Settle conditions: set stress low and motion low
+        # Settle conditions: hand-set a small consistent stress history and low
+        # motion so the consistency certificate is already satisfied.
         substrate.telemetry[1].stress_ema = 0.01f0
+        substrate.telemetry[1].signed_stress_ema = 0.01f0
         substrate.telemetry[1].residual_motion_ema = 0.001f0
         substrate.telemetry[1].consecutive_stable = 1  # satisfies k_settle=1
 
         initial_yield = substrate.region_map.regions[1].yield_up
 
-        # Tick 3: DCP fires COMMIT
-        r3 = reference_material_tick!(substrate, zeros(Float32, 64), BinghamInspired(1e-6),
+        # Tick 3: DCP fires COMMIT. Under the D1 fix, exact-zero rest can never
+        # certify stability (0/0 consistency), so the tick carries a tiny
+        # gradient aligned with the hand-set history; with beta=0 the EMAs
+        # re-derive exactly, c = 1.0 bit-exactly, and the small Bingham flow
+        # (|Δδ| = 0.001 < epsilon_delta) lands in the residual before commit.
+        g3 = zeros(Float32, 64)
+        g3[1] = -0.001f0
+        r3 = reference_material_tick!(substrate, g3, BinghamInspired(1e-6),
             FIXED_RULE_CONTROLLER, VPS();
             beta=0.0f0, gamma=0.0f0, tick=3, recorder=recorder)
 
         # In continuous FP: new weight is EXACTLY prior_w + delta
         # Notice: in ternary, 0.37 + 0.42857 = 0.79857 would SNAP to 1.0 (error: 0.20143)
         # In continuous FP, there is ZERO quantization error!
-        expected_w = 0.37f0 + target_delta
+        # The tick-3 settlement flow adds -g/eta = +0.001 to the residual.
+        expected_w = 0.37f0 + target_delta + 0.001f0
         @test !substrate.sites[1].superplastic
         @test substrate.sites[1].hot_handle == 0
         @test isapprox(substrate.sites[1].w, expected_w; atol=1e-6)
@@ -211,10 +230,12 @@ end
         @test N == 64
 
         # Fast-commit continuous FP substrate:
-        # High settle_down and epsilon_delta allow the seed to commit after k_settle ticks,
-        # consolidating continuous residuals into W_material and exposing them to the head.
+        # settle_down = 0.0 makes the consistency certificate vacuously true
+        # (threshold zero) and epsilon_delta = 1e6 disables the motion gate, so
+        # the seed commits after k_settle ticks, consolidating continuous
+        # residuals into W_material and exposing them to the head.
         substrate = initialize_fp_seed(N; region_size=64,
-            yield_up=100.0f0, settle_down=50.0f0, eta=0.01f0,
+            yield_up=100.0f0, settle_down=0.0f0, eta=0.01f0,
             hardening_increment=0.05f0, epsilon_delta=1.0f6,
             k_yield=2, k_settle=2)
 

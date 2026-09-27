@@ -16,6 +16,7 @@ export check_invariants, get_region_id, get_region, get_region_for_site
 export allocate!, release!, get_residual, set_residual!, integrate_residual!
 export num_allocated, available_count, has_capacity, is_valid_handle
 export update_stress_ema!, update_residual_motion_ema!, update_counters!, reset_lifecycle_counters!
+export update_signed_stress_ema!, gradient_consistency
 export ternary_round
 export ExposurePolicy, ZCS, VPS, exposure, exposure_snapshot, commit_base
 export initialize_stage0_seed, initialize_consolidated_substrate
