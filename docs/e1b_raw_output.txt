@@ -1,0 +1,46 @@
+==============================================================================================================
+E1b — four-arm comparison on HARD family (4 tasks, 15-tick phases (Amendment 1), A→B→C→D→B→A→C→D→A→B), preregistered [mode=full]
+==============================================================================================================
+
+--- ARM_SUB (frozen E0c-prime parameterization) ---
+sub      | phaseFinal= 0.3112 retMatched= 0.7608 (band 0.0932) retRaw= 0.5884 | midJump= 0.260 | hotMean= 0.93 hotEnd=0.92
+         gains:   A=+1.0545  B=-0.8496  C=-0.2163  D=-0.3497  mean=-0.0903
+         entries: A=[p1:0.333, p6:1.432, p9:0.378] B=[p2:0.363, p5:0.582, p10:1.843] C=[p3:0.318, p7:0.534] D=[p4:0.559, p8:0.909] 
+
+--- ARM_C3 (shadow-ternary control; frozen row + sweep) ---
+  frozen lr=0.0010: phaseFinal= 0.3323 retMatched= 0.3409
+  swept  lr=0.003: phaseFinal= 0.3323 retMatched= 0.3409
+  swept  lr=0.010: phaseFinal= 0.3197 retMatched= 0.4607
+  swept  lr=0.030: phaseFinal= 0.5300 retMatched= 1.1224
+  best C3:
+c3       | phaseFinal= 0.3197 retMatched= 0.4607 (band 0.2529) retRaw= 0.3744 | midJump= 0.325 | hotMean=  NaN hotEnd= NaN
+         gains:   A=+0.0120  B=-0.0296  C=-0.0020  D=-0.0109  mean=-0.0076
+         entries: A=[p1:0.333, p6:0.362, p9:0.350] B=[p2:0.333, p5:0.371, p10:0.355] C=[p3:0.333, p7:0.335] D=[p4:0.333, p8:0.344] 
+
+--- ARM_FP32 (material-lr sweep, best kept) ---
+  lr=0.001 phaseFinal= 0.3466 retMatched= 0.3640
+  lr=0.003 phaseFinal= 0.3506 retMatched= 0.4632
+  lr=0.010 phaseFinal= 0.2369 retMatched= 0.8122
+  lr=0.030 phaseFinal= 0.1315 retMatched= 0.9019
+  lr=0.100 phaseFinal= 0.1465 retMatched= 0.8677
+  lr=0.300 phaseFinal= 0.2005 retMatched= 0.8791
+fp32     | phaseFinal= 0.1315 retMatched= 0.9019 (band 0.0309) retRaw= 0.9309 | midJump= 0.329 | hotMean=  NaN hotEnd= NaN
+         gains:   A=+1.5381  B=-0.0146  C=-0.1005  D=-0.4828  mean=+0.2350
+         entries: A=[p1:0.333, p6:1.862, p9:0.324] B=[p2:1.143, p5:0.759, p10:1.555] C=[p3:0.936, p7:1.037] D=[p4:1.159, p8:1.642] 
+
+--- ARM_FIXED (controller ablation: substrate minus phase machine) ---
+fixed    | phaseFinal= 0.3050 retMatched= 1.0181 (band 0.1099) retRaw= 0.6894 | midJump= 0.324 | hotMean= 0.72 hotEnd=0.47
+         gains:   A=+1.2716  B=-0.7280  C=-0.2118  D=-0.5606  mean=-0.0572
+         entries: A=[p1:0.333, p6:1.590, p9:0.319] B=[p2:0.391, p5:0.732, p10:1.507] C=[p3:0.350, p7:0.561] D=[p4:0.390, p8:0.950] 
+
+==============================================================================================================
+PREREGISTERED HYPOTHESIS CHECKS
+==============================================================================================================
+H1 validity:    best baseline phaseFinal = 0.1315  [PASS (>0.05: family is hard)]
+H2 pareto:      SUB (pf=0.3112, retM=0.7608); dominators: none  [PASS]
+H3 history:     SUB gains>0 on 1/4 tasks (A+1.055 B-0.850 C-0.216 D-0.350); SUB mean -0.0903 vs FIXED -0.0572  [FAIL]
+H4 stability:   SUB midJump=0.2598  [PASS]
+H5 locality:    SUB hotMean=0.929  [FAIL]
+
+Controller-ablation deltas (SUB − FIXED):
+  phaseFinal +0.0062  retMatched -0.2573  meanGain -0.0331
