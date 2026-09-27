@@ -110,6 +110,86 @@ end
     @test effective_ramp_ticks(bare, RampedVPS(2)) == 2
 end
 
+@testset "E0d — tag routing mechanics" begin
+    # Carrier lock: a site's tag survives MELT (the melt preserves w and the
+    # consolidation reference by design — the lifecycle's memory).
+    sub = initialize_fp_consolidated_substrate(64; region_size=64)
+    site = sub.sites[1]
+    site.commit_sign = Int8(1)
+    site.commit_stress = 0.05f0
+    site.consolidation_tick = Int32(3)
+    # Melt via the kernel so stamps are authoritative. NOTE the load is
+    # OPPOSED to the tag: the phase machine's committed-side melt fires ONLY
+    # via the conflict certificate (sustained opposed load) — aligned sites
+    # are implicitly protected forever (the E0d implicit-routing observation).
+    # With beta=0 the EMA re-derives exactly (c=1) and the floor is
+    # max(0.5*0.05, 1e-3) = 0.025 << 0.6, so the counter accrues 1/tick;
+    # default conflict_k=4 → the melt fires on the 4th opposed tick.
+    sub.telemetry[1].stress_ema = 0.6f0
+    for tick in 9:12
+        reference_material_tick!(sub, fill(-0.6f0, 64), NEWTONIAN,
+            PHASE_MACHINE_CONTROLLER, RampedVPS(2); beta=0.0f0, gamma=0.0f0, tick=tick)
+    end
+    @test site.phase === :plastic
+    @test site.commit_sign == Int8(1)   # THE CARRIER: tag outlived the melt
+    @test site.commit_stress == 0.05f0
+
+    # Dwell remission: TAGR commits a tag-aligned melted site on the first
+    # certified settle tick; PHASE makes the same site wait k_commit.
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)
+    for (ctrl, expected) in ((TAG_ROUTING_CONTROLLER, :commit),
+                             (PHASE_MACHINE_CONTROLLER, :hold))
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)          # aligned with the load below
+        st.plastic_since = Int32(10)
+        s.telemetry[1].consecutive_stable = Int32(2)  # certificate saturated
+        s.telemetry[1].stress_ema = 0.05f0            # melt margin holds
+        s.telemetry[1].signed_stress_ema = 0.05f0     # direction: agrees with tag
+        snap = create_snapshot(1, s.region_map.regions[1], st,
+            s.telemetry[1], true, 11)                 # plastic age = 1 < k=2
+        a = decide(ctrl, snap)
+        if expected === :commit
+            @test a isa CommitAction
+        else
+            @test a isa NoAction
+        end
+    end
+
+    # The remission is direction-gated: a tag-OPPOSED melted site still waits.
+    s = mksub()
+    st = s.sites[1]
+    st.commit_sign = Int8(-1)             # opposed to the load below
+    st.plastic_since = Int32(10)
+    s.telemetry[1].consecutive_stable = Int32(2)
+    s.telemetry[1].stress_ema = 0.05f0
+    s.telemetry[1].signed_stress_ema = 0.05f0
+    snap = create_snapshot(1, s.region_map.regions[1], st,
+        s.telemetry[1], true, 11)
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa NoAction
+
+    # Direction-blind twin: aligned sustained load accrues the undirected
+    # counter but never the directed one.
+    t = SiteTelemetry(0.3f0)
+    t.signed_stress_ema = 0.3f0
+    update_counters!(t, 0.5f0, 0.25f0, 0.02f0, Int8(1), 0.4f0)
+    update_undirected_conflict!(t, 0.25f0, 0.4f0)
+    @test t.consecutive_conflicted == 0          # aligned: directed silent
+    @test t.consecutive_conflicted_undirected == 1  # blind: counts anyway
+    # UndirectedController must therefore melt a site the phase machine spares.
+    site2 = sub.sites[2]
+    site2.commit_sign = Int8(1)
+    site2.commit_stress = 0.3f0
+    sub.telemetry[2].stress_ema = 0.3f0
+    sub.telemetry[2].signed_stress_ema = 0.3f0
+    sub.telemetry[2].consecutive_conflicted_undirected =
+        sub.region_map.regions[1].conflict_k   # saturated for THIS region
+    snap2 = create_snapshot(2, sub.region_map.regions[1], site2,
+        sub.telemetry[2], true, 99)
+    @test decide(UNDIRECTED_CONTROLLER, snap2) isa MeltAction
+end
+
 @testset "E0c P5-prime — adaptive ramp bounds per-tick exposed change" begin
     # Length selection: small deltas keep the fixed length; large deltas
     # extend it to ceil(|δ|/m_max).

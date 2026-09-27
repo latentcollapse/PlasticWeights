@@ -1,0 +1,48 @@
+==============================================================================================================
+E0d — tag routing: PHASE vs TAGR vs UNDIR vs FIXED across the phase-length grid, preregistered
+==============================================================================================================
+
+--- L = 15 ---
+PHASE  L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 M=  46
+TAGR   L= 15 | pf= 0.2798 retM= 0.8764 gain=+0.1226 | hot= 0.82 jump=0.226 | C= 100 M=  73
+UNDIR  L= 15 | pf= 0.2937 retM= 0.8865 gain=+0.0218 | hot= 0.91 jump=0.264 | C= 213 M= 201
+FIXED  L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 M=   7
+
+--- L = 40 ---
+PHASE  L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 M= 248
+TAGR   L= 40 | pf= 0.0851 retM= 0.8745 gain=+0.1372 | hot= 0.40 jump=0.572 | C= 406 M= 345
+UNDIR  L= 40 | pf= 0.0851 retM= 0.8778 gain=+0.0611 | hot= 0.43 jump=0.572 | C= 821 M= 766
+FIXED  L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 M=   6
+
+--- L = 75 ---
+PHASE  L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 M= 396
+TAGR   L= 75 | pf= 0.0551 retM= 0.8493 gain=+0.0720 | hot= 0.28 jump=0.548 | C= 430 M= 368
+UNDIR  L= 75 | pf= 0.0551 retM= 0.8423 gain=+0.0756 | hot= 0.31 jump=0.553 | C= 612 M= 550
+FIXED  L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 M=   6
+
+--- L = 150 ---
+PHASE  L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 M= 218
+TAGR   L=150 | pf= 0.0112 retM= 0.8536 gain=+0.3254 | hot= 0.08 jump=0.765 | C= 127 M=  63
+UNDIR  L=150 | pf= 0.0112 retM= 0.8556 gain=+0.3101 | hot= 0.09 jump=0.686 | C= 169 M= 105
+FIXED  L=150 | pf= 0.0116 retM= 0.8689 gain=+0.3215 | hot= 0.07 jump=0.672 | C=  71 M=   7
+
+==============================================================================================================
+PREREGISTERED RESULT CHECKS
+==============================================================================================================
+
+L=15:  PHASE gain=-0.0903  TAGR +0.1226  UNDIR +0.0218  FIXED -0.0572
+       PHASE pf=0.3112  TAGR 0.2798  UNDIR 0.2937  FIXED 0.3050
+
+L=40:  PHASE gain=+0.0205  TAGR +0.1372  UNDIR +0.0611  FIXED +0.1618
+       PHASE pf=0.0863  TAGR 0.0851  UNDIR 0.0851  FIXED 0.0849
+
+L=75:  PHASE gain=+0.0461  TAGR +0.0720  UNDIR +0.0756  FIXED +0.0647
+       PHASE pf=0.0653  TAGR 0.0551  UNDIR 0.0551  FIXED 0.0552
+
+L=150:  PHASE gain=+0.4067  TAGR +0.3254  UNDIR +0.3101  FIXED +0.3215
+       PHASE pf=0.0132  TAGR 0.0112  UNDIR 0.0112  FIXED 0.0116
+
+R1 window extension (TAGR(40) > PHASE(40) and > 0):  +0.1372 vs +0.0205  [PASS]
+R2 monotone dose (TAGR > PHASE at every L):           L15:+ L40:+ L75:+ L150:-  [FAIL]
+R3 causality (PHASE(150) > UNDIR(150)):               +0.4067 vs +0.3101  [PASS]
+R4 invalidation invariance (|TAGR-PHASE| melts <=10%): L15:73/46 L40:345/248 L75:368/396 L150:63/218  [FAIL]

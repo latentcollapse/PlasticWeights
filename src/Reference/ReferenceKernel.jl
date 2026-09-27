@@ -74,6 +74,9 @@ function reference_material_tick!(substrate::SubstrateState,
                 site.commit_sign,
                 site.commit_stress,
             )
+            # E0d: direction-blind twin counter for the UndirectedController
+            # ablation (same thresholds, no tag-direction condition).
+            update_undirected_conflict!(telem, region.settle_down, site.commit_stress)
         else
             update_counters!(
                 telem,
@@ -151,9 +154,11 @@ function reference_material_tick!(substrate::SubstrateState,
         # consolidation reference) are part of the transition itself.
         apply_action!(substrate, action, policy; tick=tick)
 
-        # A fired transition resets the conflict certificate: the site's
+        # A fired transition resets both conflict counters: the site's
         # reference is fresh (commit) or void (melt reopens the residual).
-        substrate.telemetry[Int(action.site_index)].consecutive_conflicted = Int32(0)
+        telem_i = substrate.telemetry[Int(action.site_index)]
+        telem_i.consecutive_conflicted = Int32(0)
+        telem_i.consecutive_conflicted_undirected = Int32(0)
 
         recorder === nothing ||
             record_action_after!(recorder, tick, pending, substrate)

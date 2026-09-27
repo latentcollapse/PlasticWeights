@@ -12,18 +12,22 @@ mutable struct SiteTelemetry
     consecutive_above_yield::Int32
     consecutive_stable::Int32
     consecutive_conflicted::Int32
+    consecutive_conflicted_undirected::Int32
 
     function SiteTelemetry(stress_ema::Real=0.0,
                            residual_motion_ema::Real=0.0,
                            consecutive_above_yield::Integer=0,
                            consecutive_stable::Integer=0;
                            signed_stress_ema::Real=NaN,
-                           consecutive_conflicted::Integer=0)
+                           consecutive_conflicted::Integer=0,
+                           consecutive_conflicted_undirected::Integer=0)
         stress_ema >= 0 || error("HardFailure: stress EMA cannot be negative")
         residual_motion_ema >= 0 || error("HardFailure: residual-motion EMA cannot be negative")
         consecutive_above_yield >= 0 || error("HardFailure: negative above-yield counter")
         consecutive_stable >= 0 || error("HardFailure: negative stable counter")
         consecutive_conflicted >= 0 || error("HardFailure: negative conflict counter")
+        consecutive_conflicted_undirected >= 0 ||
+            error("HardFailure: negative undirected conflict counter")
         # signed_stress_ema defaults to NaN ("unknown"): hand-constructed
         # telemetry that specifies only magnitudes is treated as fresh state
         # (consistency 0), not as a silently wrong directional statistic.
@@ -32,7 +36,8 @@ mutable struct SiteTelemetry
         isfinite(ss) || (ss = Float32(NaN32))
         new(Float32(stress_ema), ss, Float32(residual_motion_ema),
             Int32(consecutive_above_yield), Int32(consecutive_stable),
-            Int32(consecutive_conflicted))
+            Int32(consecutive_conflicted),
+            Int32(consecutive_conflicted_undirected))
     end
 end
 
@@ -152,6 +157,26 @@ function update_counters!(telemetry::SiteTelemetry, yield_up::Real,
 end
 
 """
+Direction-blind conflict counter (E0d ablation): identical thresholds and
+floor, but ALIGNED sustained load counts too. Comparing the two counters
+isolates what the tag's direction condition contributes.
+"""
+function update_undirected_conflict!(telemetry::SiteTelemetry,
+                                     settle_down::Real,
+                                     commit_stress::Real)
+    if commit_stress > 0.0f0
+        floor = max(CONFLICT_FLOOR * Float32(commit_stress), CONFLICT_MIN_FLOOR)
+        if gradient_consistency(telemetry) >= Float32(settle_down) &&
+           telemetry.stress_ema >= floor
+            telemetry.consecutive_conflicted_undirected += Int32(1)
+            return nothing
+        end
+    end
+    telemetry.consecutive_conflicted_undirected = Int32(0)
+    return nothing
+end
+
+"""
 Fraction of the consolidating stress that sustained opposed load must reach
 before it counts toward the conflict certificate. Below this floor, small
 contrary drift cannot invalidate a consolidation record.
@@ -169,5 +194,6 @@ function reset_lifecycle_counters!(telemetry::SiteTelemetry)
     telemetry.consecutive_above_yield = Int32(0)
     telemetry.consecutive_stable = Int32(0)
     telemetry.consecutive_conflicted = Int32(0)
+    telemetry.consecutive_conflicted_undirected = Int32(0)
     return nothing
 end

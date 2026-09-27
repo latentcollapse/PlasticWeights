@@ -67,6 +67,8 @@ struct FPSnapshot <: AbstractSnapshot
     commit_sign::Int8
     plastic_since::Int32
     commit_stress::Float32
+    melt_tag_agrees::Bool
+    consecutive_conflicted_undirected::Int32
 
     function FPSnapshot(site_index::Integer, w::Real,
                         allocated::Bool, superplastic::Bool,
@@ -81,7 +83,9 @@ struct FPSnapshot <: AbstractSnapshot
                         consolidation_tick::Integer=0,
                         commit_sign::Integer=0,
                         plastic_since::Integer=0,
-                        commit_stress::Real=0.0)
+                        commit_stress::Real=0.0,
+                        melt_tag_agrees::Bool=false,
+                        consecutive_conflicted_undirected::Integer=0)
         wf = Float32(w)
         isfinite(wf) || error("HardFailure: snapshot w must be finite, got $wf")
         commit_sign in (-1, 0, 1) ||
@@ -93,7 +97,8 @@ struct FPSnapshot <: AbstractSnapshot
             Float32(epsilon_delta), melt_budget_available, Int32(tick),
             Int32(conflict_k), Int32(consecutive_conflicted),
             Int32(consolidation_tick), Int8(commit_sign), Int32(plastic_since),
-            Float32(commit_stress))
+            Float32(commit_stress), Bool(melt_tag_agrees),
+            Int32(consecutive_conflicted_undirected))
     end
 end
 
@@ -120,5 +125,9 @@ function create_snapshot(site_index::Integer, region::RegionState,
         consolidation_tick=site.consolidation_tick,
         commit_sign=site.commit_sign,
         plastic_since=site.plastic_since,
-        commit_stress=site.commit_stress)
+        commit_stress=site.commit_stress,
+        melt_tag_agrees=(site.commit_sign != 0 && isfinite(telemetry.signed_stress_ema) &&
+                         telemetry.signed_stress_ema != 0.0f0 &&
+                         sign(telemetry.signed_stress_ema) == site.commit_sign),
+        consecutive_conflicted_undirected=telemetry.consecutive_conflicted_undirected)
 end
