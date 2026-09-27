@@ -1,0 +1,5 @@
+subS   L=100 | pf= 0.0313 retM= 0.8616 (band 0.0006) gain=+0.5220 | hot= 0.09 jump=0.827 | commit0.40 melt0.20 cert0.00 margin0.00 | C=  69 M=   5
+fixS   L=100 | pf= 0.0132 retM= 0.8578 (band 0.0003) gain=+0.3572 | hot= 0.12 jump=0.561 | commit0.30 melt0.10 cert0.00 margin0.00 | C=  70 M=   6
+S1 locality:   SUB-scaled hotMean=0.092  [PASS]
+S2 history:    SUB-scaled gain=+0.5220 vs FIXED-scaled +0.3572  [PASS]
+S3 no-tax:     SUB-scaled pf=0.0313 vs FIXED-scaled 0.0132 (+0.05 allowance)  [PASS]

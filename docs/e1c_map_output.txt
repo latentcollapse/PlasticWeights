@@ -1,0 +1,22 @@
+==============================================================================================================
+E1c — phase-length sweep, SUB vs FIXED (map mode) / held-out validation (validate mode) [map]
+==============================================================================================================
+sub    L= 15 | pf= 0.3112 retM= 0.7608 (band 0.0932) gain=-0.0903 | hot= 0.93 jump=0.260 | commit0.90 melt0.90 cert0.12 margin0.00 | C=  51 M=  46
+fixed  L= 15 | pf= 0.3050 retM= 1.0181 (band 0.1099) gain=-0.0572 | hot= 0.72 jump=0.324 | commit0.90 melt0.20 cert0.00 margin0.00 | C=  41 M=   7
+      deltas SUB−FIXED: pf +0.0062  retM -0.2573  gain -0.0331
+--------------------------------------------------------------------------------------------------------------
+sub    L= 40 | pf= 0.0863 retM= 0.8315 (band 0.0143) gain=+0.0205 | hot= 0.71 jump=0.527 | commit0.90 melt0.90 cert0.02 margin0.00 | C= 288 M= 248
+fixed  L= 40 | pf= 0.0849 retM= 0.8606 (band 0.0149) gain=+0.1618 | hot= 0.35 jump=0.602 | commit0.60 melt0.10 cert0.00 margin0.00 | C=  70 M=   6
+      deltas SUB−FIXED: pf +0.0014  retM -0.0291  gain -0.1413
+--------------------------------------------------------------------------------------------------------------
+sub    L= 75 | pf= 0.0653 retM= 0.8408 (band 0.0021) gain=+0.0461 | hot= 0.46 jump=0.555 | commit0.90 melt0.90 cert0.02 margin0.00 | C= 458 M= 396
+fixed  L= 75 | pf= 0.0552 retM= 0.8408 (band 0.0021) gain=+0.0647 | hot= 0.25 jump=0.554 | commit0.30 melt0.10 cert0.00 margin0.00 | C=  70 M=   6
+      deltas SUB−FIXED: pf +0.0102  retM +0.0000  gain -0.0186
+--------------------------------------------------------------------------------------------------------------
+sub    L=150 | pf= 0.0132 retM= 0.8586 (band 0.0001) gain=+0.4067 | hot= 0.20 jump=0.604 | commit1.00 melt1.00 cert0.01 margin0.00 | C= 282 M= 218
+fixed  L=150 | pf= 0.0116 retM= 0.8689 (band 0.0000) gain=+0.3215 | hot= 0.07 jump=0.672 | commit0.20 melt0.20 cert0.00 margin0.00 | C=  71 M=   7
+      deltas SUB−FIXED: pf +0.0016  retM -0.0102  gain +0.0852
+--------------------------------------------------------------------------------------------------------------
+
+(Map complete. The scaling rule is derived and preregistered in
+ docs/E1C_PHASE_LENGTH_REPORT before `validate` is run.)
