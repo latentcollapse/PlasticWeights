@@ -1,0 +1,54 @@
+================================================================================================================================
+E0g — per-phase commit budget (Pass 3d): quota-shaped 1/tick budget, PHASE commit rule — preregistered [mode: checks]
+================================================================================================================================
+
+================================================================================================================================
+ALL CACHED ROWS
+================================================================================================================================
+PHASE    L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 (y 24/d 27) M=  46 (y 21/d 25) | C/phase μ= 5.10 max= 12
+QUOTA    L= 15 | pf= 0.3101 retM= 0.7582 gain=-0.0905 | hot= 0.93 jump=0.261 | C=  50 (y 23/d 27) M=  43 (y 21/d 22) | C/phase μ= 5.00 max= 11
+QUOTA_A  L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 (y 24/d 27) M=  46 (y 21/d 25) | C/phase μ= 5.10 max= 12
+FIXED    L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 (y 28/d 13) M=   7 (y  6/d  1) | C/phase μ= 4.10 max= 13
+PHASE    L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 (y142/d146) M= 248 (y120/d128) | C/phase μ=28.80 max= 40
+QUOTA    L= 40 | pf= 0.0858 retM= 0.8447 gain=+0.0334 | hot= 0.67 jump=0.554 | C= 283 (y141/d142) M= 237 (y113/d124) | C/phase μ=28.30 max= 40
+QUOTA_A  L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 (y142/d146) M= 248 (y120/d128) | C/phase μ=28.80 max= 40
+FIXED    L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 (y 22/d 48) M=   6 (y  3/d  3) | C/phase μ= 7.00 max= 31
+PHASE    L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190) | C/phase μ=45.80 max= 72
+QUOTA    L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190) | C/phase μ=45.80 max= 72
+QUOTA_A  L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190) | C/phase μ=45.80 max= 72
+FIXED    L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 (y 35/d 35) M=   6 (y  6/d  0) | C/phase μ= 7.00 max= 57
+PHASE    L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22) | C/phase μ=28.20 max= 58
+QUOTA    L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22) | C/phase μ=28.20 max= 58
+QUOTA_A  L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22) | C/phase μ=28.20 max= 58
+FIXED    L=150 | pf= 0.0116 retM= 0.8689 gain=+0.3215 | hot= 0.07 jump=0.672 | C=  71 (y 13/d 58) M=   7 (y  7/d  0) | C/phase μ= 7.10 max= 64
+
+================================================================================================================================
+PREREGISTERED RESULT CHECKS (evaluated on available rows)
+================================================================================================================================
+
+L=15:  PHASE -0.0903  QUOTA -0.0905  QUOTA_A -0.0903  FIXED -0.0572  (meanGain)
+       pf:  PHASE 0.3112  QUOTA 0.3101  QUOTA_A 0.3112  FIXED 0.3050
+       commits: PHASE 51 (μ/ph 5.1, max 12)  QUOTA 50 (μ/ph 5.0, max 11)  QUOTA_A 51 (μ/ph 5.1, max 12)
+       melts (young/total): PHASE 21/46  QUOTA 21/43  QUOTA_A 21/46
+
+L=40:  PHASE +0.0205  QUOTA +0.0334  QUOTA_A +0.0205  FIXED +0.1618  (meanGain)
+       pf:  PHASE 0.0863  QUOTA 0.0858  QUOTA_A 0.0863  FIXED 0.0849
+       commits: PHASE 288 (μ/ph 28.8, max 40)  QUOTA 283 (μ/ph 28.3, max 40)  QUOTA_A 288 (μ/ph 28.8, max 40)
+       melts (young/total): PHASE 120/248  QUOTA 113/237  QUOTA_A 120/248
+
+L=75:  PHASE +0.0461  QUOTA +0.0461  QUOTA_A +0.0461  FIXED +0.0647  (meanGain)
+       pf:  PHASE 0.0653  QUOTA 0.0653  QUOTA_A 0.0653  FIXED 0.0552
+       commits: PHASE 458 (μ/ph 45.8, max 72)  QUOTA 458 (μ/ph 45.8, max 72)  QUOTA_A 458 (μ/ph 45.8, max 72)
+       melts (young/total): PHASE 206/396  QUOTA 206/396  QUOTA_A 206/396
+
+L=150:  PHASE +0.4067  QUOTA +0.4067  QUOTA_A +0.4067  FIXED +0.3215  (meanGain)
+       pf:  PHASE 0.0132  QUOTA 0.0132  QUOTA_A 0.0132  FIXED 0.0116
+       commits: PHASE 282 (μ/ph 28.2, max 58)  QUOTA 282 (μ/ph 28.2, max 58)  QUOTA_A 282 (μ/ph 28.2, max 58)
+       melts (young/total): PHASE 196/218  QUOTA 196/218  QUOTA_A 196/218
+
+C0 canary reproduction (PHASE@150 == E0d committed):   gain +0.4067 melts 218  [PASS]
+R1 short-window win (QUOTA>PHASE at 15 and 40): -0.0905/+0.0334 vs -0.0903/+0.0205  [FAIL]
+R2 long-window parity (QUOTA(150) >= PHASE(150) − 5%):        +0.4067 vs +0.4067  [PASS]
+R3 volume parity at 150 (melts 218 vs 218, commits 282 vs 282; both <= 15%):  [PASS]
+R4 ablation adjudication (QUOTA_A(150) >= PHASE(150) − 5%, melts <= 15%): +0.4067, melts 218  [PASS]
+R5 mechanistic link (PHASE(15) <= QUOTA(15) commits <= 3·PHASE(15)): 50 in [77, 153]  [FAIL]

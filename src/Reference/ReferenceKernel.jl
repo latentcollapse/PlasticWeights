@@ -127,10 +127,25 @@ function reference_material_tick!(substrate::SubstrateState,
                      Int(substrate.region_map.regions[1].phase_length)
         young_window = _regime_young_phase(dcp, declared_L, tick)
     end
+    # E0g (per-phase quota): the budget stays 1/tick in SHAPE, but the phase-
+    # quota arm admits min(1, Q − commits_so_far_this_phase) — the quota
+    # refills at each phase boundary, lifting the commit rate exactly where
+    # the phase machine is rate-starved (short L) while keeping the per-phase
+    # VOLUME bounded (E0f-D1 vs TAGR's long-L poisoning). The spent-quota
+    # counter is derived from live consolidation stamps, statelessly.
+    phase_quota_remaining = 0
+    if dcp isa PhaseQuotaController
+        declared_L = phase_length > 0 ? phase_length :
+                     Int(substrate.region_map.regions[1].phase_length)
+        spent = _commits_this_phase(substrate, declared_L, tick)
+        phase_quota_remaining =
+            max(0, Int(_phase_quota_ticks(dcp.quota_fraction, Int32(declared_L))) - spent)
+    end
     commit_budget =
         dcp isa Union{PhaseMachineController, MeltRoutingController} ? 1 :
         dcp isa RegimeAdaptiveController ?
             (dcp.budgeted || !young_window ? 1 : typemax(Int)) :
+        dcp isa PhaseQuotaController ? min(1, phase_quota_remaining) :
         typemax(Int)
 
     for i in eachindex(substrate.sites)

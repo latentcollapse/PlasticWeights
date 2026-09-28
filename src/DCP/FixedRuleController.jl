@@ -163,6 +163,86 @@ function _regime_young_phase(controller::RegimeAdaptiveController,
 end
 
 """
+    PhaseQuotaController(k_commit=2; quota_fraction=0.5)
+
+E0g (Pass 3d): per-phase commit budget. E0f-D1 located the short-L (L=15)
+deficit as commit-RATE-bound: the phase machine's 1/tick commit budget
+throttles re-adaptation, and TAGR's full budget lift fixed short L (+0.1226
+vs PHASE −0.0903) but poisoned long L (−0.085 at L=150 — E0e-D2: churn
+pacing carries the large-L gain). The synthesis: keep the phase machine's
+commit rule (settle + dwell + melt margin, NO remission) and its 1/tick
+pacing, but shape the budget as a PHASE-LEVEL QUOTA:
+
+  admitted(tick) = min(1, Q − commits_so_far_in_current_phase),  Q = quota_fraction·L
+
+so the commit rate is lifted wherever the phase machine is rate-starved
+(short L) while the total per-phase commit volume stays bounded; the quota
+refills at every phase boundary. Any surplus above what the phase machine
+would spend is behaviorally inert at long L (the queue rarely reaches Q),
+so the arm degrades to the phase machine BY ARITHMETIC where the quota does
+not bind — the same clean ablation structure E0f used on the melt side.
+
+`quota_fraction` defaults to 0.5 (calibration: PHASE spends 5.1/28.8/45.8/
+28.2 commits per phase at L=15/40/75/150, so Q = 8/20/38/75 lifts the short-L
+rate ~50% while binding nowhere at long L). Requires a declared phase length
+(`phase_length > 0`), HardFailure at decision time otherwise; the controller
+stays STATELESS — the kernel derives `commits_so_far_in_current_phase` from
+live `consolidation_tick` stamps (commits stamp the tick, melts zero it), no
+controller memory or substrate state is added.
+
+Note: per-tick admission stays ≤ 1, so the E0b2 coordinated-commit-wave
+failure mode stays impossible by construction; the quota changes WHICH ticks
+can admit, not how many per tick.
+"""
+struct PhaseQuotaController <: DCP
+    k_commit::Int32
+    quota_fraction::Float32
+    function PhaseQuotaController(k_commit::Integer=2;
+                                  quota_fraction::Real=0.5)
+        k_commit >= 1 ||
+            error("HardFailure: PhaseQuotaController k_commit must be >= 1")
+        qf = Float32(quota_fraction)
+        isfinite(qf) && 0.0f0 < qf <= 1.0f0 ||
+            error("HardFailure: PhaseQuotaController quota_fraction must be in (0,1], got $qf")
+        new(Int32(k_commit), qf)
+    end
+end
+
+const PHASE_QUOTA_CONTROLLER = PhaseQuotaController()
+
+"""E0g quota in commits: `ceil(quota_fraction · L)` with the same relative
+snap tolerance `_young_boundary_ticks` uses, so binary-inexact fractions
+(0.2f0·10 = 2.000000003) cannot inflate the quota by one commit."""
+function _phase_quota_ticks(quota_fraction::Float32, phase_length::Int32)::Int32
+    b = Float64(quota_fraction) * Float64(phase_length)
+    return Int32(ceil(b - 1e-6 * max(1.0, b))) >= 1 ?
+           Int32(ceil(b - 1e-6 * max(1.0, b))) : Int32(1)
+end
+
+"""Kernel-side single source of truth: commits already spent in the phase
+containing `tick`. Counts live FPSiteState stamps: commits stamp
+`consolidation_tick = tick`, melts zero it, so the count of stamps in the
+open interval ((p−1)·L, tick] is exactly the number of commits admitted this
+phase — no substrate state or controller memory is needed (the stateless-DCP
+contract holds; the kernel is the single authority over the budget).
+
+Requires a declared positive phase_length, HardFailure otherwise."""
+function _commits_this_phase(substrate::SubstrateState,
+                             phase_length::Integer, tick::Integer)::Int
+    phase_length > 0 ||
+        error("HardFailure: PhaseQuotaController requires a declared positive phase_length")
+    p = cld(tick, phase_length)
+    phase_start = (p - 1) * phase_length
+    count = 0
+    for site in substrate.sites
+        site isa FPSiteState || continue
+        ct = Int(site.consolidation_tick)
+        ct > phase_start && ct <= tick && (count += 1)
+    end
+    return count
+end
+
+"""
     MeltRoutingController(k_commit=2; young_fraction=0.5)
 
 E0f (Pass 3c): melt-side routing. E0e-D2 showed the deep window cannot be
@@ -335,6 +415,35 @@ function decide(controller::RegimeAdaptiveController, snapshot::FPSnapshot)::Lif
         young = snapshot.ticks_into_phase <
                 _young_boundary_ticks(controller.young_fraction, snapshot.phase_length)
         return _plastic_commit_decision(snapshot, controller.k_commit, young)
+    end
+
+    return NO_ACTION
+end
+
+function decide(controller::PhaseQuotaController, snapshot::FPSnapshot)::LifecycleAction
+    # Quota declaration is mandatory: no silent degeneration to the phase
+    # machine when the harness forgot to declare a phase length (the quota is
+    # meaningless without one — the kernel-side counter needs the window).
+    snapshot.phase_length > 0 ||
+        error("HardFailure: PhaseQuotaController requires a declared positive region phase_length")
+
+    # Committed sites: identical invalidation to the phase machine — the quota
+    # varies ONLY the budget shape, so anti-ossification strength is unchanged
+    # by construction.
+    if snapshot.allocated && !snapshot.superplastic
+        if snapshot.commit_sign != 0 &&
+           snapshot.consecutive_conflicted >= snapshot.conflict_k
+            snapshot.melt_budget_available || return NO_ACTION
+            return MeltAction(snapshot.site_index)
+        end
+        return NO_ACTION
+    end
+
+    # Plastic sites: the decision is EXACTLY the phase machine's (settle +
+    # dwell, no remission, melt margin). Any behavioral difference comes from
+    # the kernel's budget shape, not from the per-site rule.
+    if snapshot.allocated && snapshot.superplastic
+        return _plastic_commit_decision(snapshot, controller.k_commit, false)
     end
 
     return NO_ACTION

@@ -25,6 +25,7 @@ export PhaseMachineController, PHASE_MACHINE_CONTROLLER
 export TagRoutingController, TAG_ROUTING_CONTROLLER
 export RegimeAdaptiveController, REGIME_ADAPTIVE_CONTROLLER
 export MeltRoutingController, MELT_ROUTING_CONTROLLER
+export PhaseQuotaController, PHASE_QUOTA_CONTROLLER
 export UndirectedController, UNDIRECTED_CONTROLLER
 export update_undirected_conflict!
 export initialize_stage0_seed, initialize_consolidated_substrate

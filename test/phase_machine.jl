@@ -1058,3 +1058,245 @@ end
     @test check_invariants(st1, mlp1)
     @test check_invariants(st2, mlp2)
 end
+
+# ---------------------------------------------------------------------------
+# E0g — per-phase commit budget (Pass 3d).
+#
+# Contracts under test:
+#   1. Construction: quota_fraction ∈ (0, 1], HardFailure otherwise.
+#   2. The commit decision is EXACTLY the phase machine's (settle + dwell +
+#      melt margin, NO remission) in both windows; the melt side too. Any
+#      behavioral difference comes from the kernel's budget shape.
+#   3. Undeclared phase length is a HardFailure — at decide() AND in the
+#      kernel's budget block (no silent degeneration).
+#   4. Kernel quota: exhaustion mid-phase and refill at the phase boundary on
+#      the live all-settle fixture (settle accrues live; tick 1 admits 0).
+#      Per-tick admission stays <= 1 (the E0b2 wave stays impossible).
+#   5. The spent-quota counter is derived from LIVE consolidation stamps in
+#      ((p−1)L, tick]: commits stamp, melts zero, previous-phase stamps do
+#      not consume this phase's quota. No controller memory.
+#   6. An unbound quota is behaviorally the phase machine (same sites, same
+#      ticks).
+#   7. End-to-end determinism with the quota binding in the loop.
+#
+# Fixture gotchas (E0c/E0e/E0f, carried forward): consolidated initializers
+# build commit_sign = 0, so the certificate can NEVER fire until the commit
+# reference is hand-stamped; settle counters accrue live, so tick 1 of a
+# fresh seed commits 0 (k_settle = 2 reached on tick 2); plastic age is
+# tick − plastic_since, not position in phase.
+# ---------------------------------------------------------------------------
+@testset "E0g — PhaseQuotaController construction" begin
+    @test PhaseQuotaController(2).k_commit == Int32(2)
+    @test PhaseQuotaController(2).quota_fraction == 0.5f0
+    @test PhaseQuotaController(2; quota_fraction=1.0).quota_fraction == 1.0f0
+    @test_throws ErrorException PhaseQuotaController(0)
+    @test_throws ErrorException PhaseQuotaController(2; quota_fraction=0.0)
+    @test_throws ErrorException PhaseQuotaController(2; quota_fraction=1.5)
+end
+
+@testset "E0g — commit and melt decisions are the phase machine's" begin
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)             # aligned tag: remission arms would fire
+        st.plastic_since = Int32(plastic_since)
+        t = s.telemetry[1]
+        t.consecutive_stable = Int32(2)
+        t.stress_ema = 0.05f0
+        t.signed_stress_ema = 0.05f0
+        return (s, create_snapshot(1, s.region_map.regions[1], st, t, true, tick))
+    end
+    # Young window, plastic age 1 < k_commit: refused — the QUOTA rule carries
+    # NO remission (only the budget shape differs from the phase machine).
+    s, snap = mk(11, 10)
+    @test decide(PHASE_QUOTA_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction   # the contrast
+    # Age 2: fires, identical to the phase machine.
+    s, snap = mk(12, 10)
+    @test action_code(decide(PHASE_QUOTA_CONTROLLER, snap)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap))
+    @test decide(PHASE_QUOTA_CONTROLLER, snap) isa CommitAction
+
+    # Committed side: certificate + melt budget exactly the phase machine's.
+    # (Hand-stamp the reference: consolidated fixtures carry commit_sign = 0.)
+    mkc = () -> begin
+        s = initialize_fp_consolidated_substrate(64; region_size=64,
+            initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+        site = s.sites[1]
+        site.commit_sign = Int8(1)
+        site.commit_stress = 0.5f0
+        site.consolidation_tick = Int32(5)
+        t = s.telemetry[1]
+        t.stress_ema = 0.6f0
+        t.signed_stress_ema = -0.6f0        # sustained consistent OPPOSED load
+        t.consecutive_conflicted = Int32(2)
+        return (s, create_snapshot(1, s.region_map.regions[1], site, t, true, 11))
+    end
+    s, snap = mkc()
+    @test decide(PHASE_QUOTA_CONTROLLER, snap) isa MeltAction
+    # Melt budget exhausted: no melt either.
+    s, snap = mkc()
+    snap = create_snapshot(1, s.region_map.regions[1], s.sites[1],
+        s.telemetry[1], false, 11)
+    @test decide(PHASE_QUOTA_CONTROLLER, snap) isa NoAction
+end
+
+@testset "E0g — undeclared phase length is a HardFailure for QUOTA" begin
+    sub = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)   # no phase_length declared
+    st = sub.sites[1]
+    st.commit_sign = Int8(1)
+    st.plastic_since = Int32(10)
+    snap = create_snapshot(1, sub.region_map.regions[1], st,
+        sub.telemetry[1], true, 11)
+    @test_throws ErrorException decide(PHASE_QUOTA_CONTROLLER, snap)
+    # The kernel's budget block needs the window too — it must fail BEFORE any
+    # site is decided, on the same undeclared substrate.
+    @test_throws ErrorException reference_material_tick!(sub, fill(0.01f0, 64),
+        NEWTONIAN, PHASE_QUOTA_CONTROLLER, ZCS(); beta=0.5f0, gamma=0.5f0, tick=11)
+    # The phase machine is unaffected on the same state.
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+end
+
+@testset "E0g — kernel quota exhausts and refills at the phase boundary" begin
+    # All-settle seed under a small consistent load: settle accrues live, so
+    # tick 1 admits 0 and ticks 2+ admit at the budget's pace. With
+    # quota_fraction = 1/4 on L = 16, Q = 4: the quota binds at tick 6, refills
+    # at tick 17. Admission stays <= 1 per tick throughout (E0b2 impossible).
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    g = fill(0.01f0, 64)
+    quota = PhaseQuotaController(2; quota_fraction=0.25)
+    sub = mk()
+    counts = Int[]
+    for tick in 1:32
+        r = reference_material_tick!(sub, g, NEWTONIAN, quota, ZCS();
+            beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(counts, count(a -> a isa CommitAction, r.actions))
+    end
+    @test all(<=(1), counts)                                   # pacing preserved
+    @test counts[1:16] == [0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    @test counts[17:32] == [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    @test sum(counts) == 8                                     # Q = 4 spent per phase
+    @test check_invariants(sub)
+
+    # The ONLY difference from the phase machine is the quota binding: through
+    # tick 5 the admissions are identical; at tick 6 the spent quota (4) blocks
+    # what the phase machine still admits.
+    phsub = mk()
+    ph = Int[]
+    for tick in 1:6
+        r = reference_material_tick!(phsub, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER,
+            ZCS(); beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(ph, count(a -> a isa CommitAction, r.actions))
+    end
+    @test ph == [0, 1, 1, 1, 1, 1]
+    @test counts[1:6] == [0, 1, 1, 1, 1, 0]
+end
+
+@testset "E0g — quota counts live stamps in the current phase window" begin
+    # The spent-quota counter derives from consolidation stamps in
+    # ((p−1)L, tick]: a commit hand-stamped in the PREVIOUS phase must not
+    # consume this phase's quota. (Hand-convert a seed site to committed:
+    # release its hot slot — a freed site owning an allocated pool slot is an
+    # invariant HardFailure — then stamp.)
+    mk = (stamp) -> begin
+        s = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+            epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+        st = s.sites[1]
+        release!(s.pool, st.hot_handle)
+        st.hot_handle = Int32(0)
+        st.superplastic = false
+        st.phase = :committed
+        st.commit_sign = Int8(1)
+        st.commit_stress = 0.05f0
+        st.consolidation_tick = Int32(stamp)
+        st.plastic_since = Int32(0)
+        s
+    end
+    g = fill(0.01f0, 64)
+    quota = PhaseQuotaController(2; quota_fraction=0.2)   # Q = 2 at L = 10
+    run = (s, ticks) -> begin
+        counts = Int[]
+        for tick in ticks
+            r = reference_material_tick!(s, g, NEWTONIAN, quota, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(counts, count(a -> a isa CommitAction, r.actions))
+        end
+        counts
+    end
+    # Stamp INSIDE the current phase (tick 11 ∈ (10, 20]): one unit already
+    # spent → after live settle accrual, exactly one commit (tick 12), then
+    # the quota blocks tick 13.
+    @test run(mk(11), 11:13) == [0, 1, 0]
+    # The same stamp in the PREVIOUS phase (tick 8 ∈ (0, 10]): quota full →
+    # two commits (ticks 12 and 13). Settlement accrual is identical, so the
+    # difference is purely the stamp window.
+    @test run(mk(8), 11:13) == [0, 1, 1]
+end
+
+@testset "E0g — unbound quota is behaviorally the phase machine" begin
+    # quota_fraction = 1.0 on L = 16 gives Q = 16, far above what six ticks can
+    # spend at 1/tick: identical action streams — same sites, same ticks.
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    g = fill(0.01f0, 64)
+    prints = Dict{Symbol,Vector{Vector{Tuple{Symbol,Int32}}}}()
+    for (name, dcp) in ((:phase, PHASE_MACHINE_CONTROLLER),
+                        (:quota, PhaseQuotaController(2; quota_fraction=1.0)))
+        sub = mk()
+        prints[name] = Vector{Tuple{Symbol,Int32}}[]
+        for tick in 1:6
+            r = reference_material_tick!(sub, g, NEWTONIAN, dcp, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(prints[name], action_code.(r.actions))
+        end
+        @test check_invariants(sub)
+    end
+    @test prints[:quota] == prints[:phase]
+end
+
+@testset "E0g — QUOTA end-to-end determinism with declared phase length" begin
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    N = num_material_sites(mlp)
+
+    mk_state = (m) -> initialize_material_training(m, initialize_fp_seed(N;
+        region_size=64, settle_down=0.0f0, eta=1.0f0,
+        hardening_increment=0.05f0, epsilon_delta=1.0f6,
+        k_yield=2, k_settle=2, phase_length=8))
+
+    # Default quota_fraction = 0.5 → Q = 4 per 8-tick phase: the quota BINDS.
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=PHASE_QUOTA_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+        phase_length=8,
+    )
+
+    X = Float32[1 -1; 1 -1]
+    Y = Float32[1 -1]
+
+    mlp1 = mlp
+    mlp2 = deepcopy(mlp)
+    st1 = mk_state(mlp1)
+    st2 = mk_state(mlp2)
+
+    for _ in 1:40
+        material_training_step!(mlp1, st1, X, Y, cfg)
+    end
+    for _ in 1:40
+        material_training_step!(mlp2, st2, X, Y, cfg)
+    end
+
+    fp1 = [_tpm_bits(Float32(x)) for x in vec(mlp1.H_FP32)]
+    fp2 = [_tpm_bits(Float32(x)) for x in vec(mlp2.H_FP32)]
+    @test fp1 == fp2
+    @test check_invariants(st1, mlp1)
+    @test check_invariants(st2, mlp2)
+end
