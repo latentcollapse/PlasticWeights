@@ -1,0 +1,49 @@
+==========================================================================================================================================
+E0i — burst-within-quota composite (Pass 3f): batch admission capped per phase — preregistered [mode: checks]
+==========================================================================================================================================
+
+==========================================================================================================================================
+ALL CACHED ROWS
+==========================================================================================================================================
+PHASE    L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 (y 24/d 27) M=  46 (y 21/d 25) | tickCmax=  1 ticks=  51 | C/ph μ= 5.10 max= 12
+BQ10     L= 15 | pf= 0.3204 retM= 0.6453 gain=+0.0439 | hot= 0.96 jump=0.162 | C=  31 (y 18/d 13) M=  27 (y 15/d 12) | tickCmax=  2 ticks=  17 | C/ph μ= 3.10 max=  4
+BQ50     L= 15 | pf= 0.3064 retM= 0.9688 gain=-0.0739 | hot= 0.87 jump=0.312 | C=  67 (y 48/d 19) M=  48 (y 31/d 17) | tickCmax=  6 ticks=  39 | C/ph μ= 6.70 max= 12
+FIXED    L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 (y 28/d 13) M=   7 (y  6/d  1) | tickCmax=  6 ticks=  25 | C/ph μ= 4.10 max= 13
+PHASE    L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 (y142/d146) M= 248 (y120/d128) | tickCmax=  1 ticks= 288 | C/ph μ=28.80 max= 40
+BQ10     L= 40 | pf= 0.0875 retM= 0.8344 gain=-0.1230 | hot= 0.90 jump=0.399 | C=  93 (y 61/d 32) M=  82 (y 50/d 32) | tickCmax=  4 ticks=  62 | C/ph μ= 9.30 max= 15
+BQ50     L= 40 | pf= 0.0835 retM= 0.8403 gain=+0.0401 | hot= 0.48 jump=0.482 | C= 356 (y177/d179) M= 294 (y154/d140) | tickCmax=  9 ticks= 138 | C/ph μ=35.60 max= 60
+FIXED    L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 (y 22/d 48) M=   6 (y  3/d  3) | tickCmax=  6 ticks=  36 | C/ph μ= 7.00 max= 31
+PHASE    L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190) | tickCmax=  1 ticks= 458 | C/ph μ=45.80 max= 72
+BQ10     L= 75 | pf= 0.0550 retM= 0.8527 gain=+0.0526 | hot= 0.62 jump=0.759 | C= 163 (y153/d 10) M= 114 (y104/d 10) | tickCmax=  8 ticks=  81 | C/ph μ=16.30 max= 26
+BQ50     L= 75 | pf= 0.0551 retM= 0.8511 gain=+0.0891 | hot= 0.29 jump=0.579 | C= 402 (y224/d178) M= 338 (y187/d151) | tickCmax= 11 ticks= 169 | C/ph μ=40.20 max= 80
+FIXED    L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 (y 35/d 35) M=   6 (y  6/d  0) | tickCmax=  7 ticks=  33 | C/ph μ= 7.00 max= 57
+PHASE    L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22) | tickCmax=  1 ticks= 282 | C/ph μ=28.20 max= 58
+BQ10     L=150 | pf= 0.0112 retM= 0.8514 gain=+0.3080 | hot= 0.19 jump=0.671 | C= 112 (y 74/d 38) M=  48 (y 23/d 25) | tickCmax= 13 ticks=  49 | C/ph μ=11.20 max= 34
+BQ50     L=150 | pf= 0.0112 retM= 0.8536 gain=+0.3254 | hot= 0.08 jump=0.765 | C= 127 (y 33/d 94) M=  63 (y 27/d 36) | tickCmax=  8 ticks=  51 | C/ph μ=12.70 max= 86
+
+==========================================================================================================================================
+PREREGISTERED RESULT CHECKS (evaluated on available rows)
+==========================================================================================================================================
+
+L=15:  PHASE -0.0903  BQ10 +0.0439  BQ50 -0.0739  FIXED -0.0572  (meanGain)
+       pf:  PHASE 0.3112  BQ10 0.3204  BQ50 0.3064  FIXED 0.3050
+       commits: PHASE 51 (μ/ph 5.1 max 12)  BQ10 31 (μ/ph 3.1 max 4)  BQ50 67 (μ/ph 6.7 max 12)
+       melts (young/total): PHASE 21/46  BQ10 15/27  BQ50 31/48
+
+L=40:  PHASE +0.0205  BQ10 -0.1230  BQ50 +0.0401  FIXED +0.1618  (meanGain)
+       pf:  PHASE 0.0863  BQ10 0.0875  BQ50 0.0835  FIXED 0.0849
+       commits: PHASE 288 (μ/ph 28.8 max 40)  BQ10 93 (μ/ph 9.3 max 15)  BQ50 356 (μ/ph 35.6 max 60)
+       melts (young/total): PHASE 120/248  BQ10 50/82  BQ50 154/294
+
+L=75:  PHASE +0.0461  BQ10 +0.0526  BQ50 +0.0891  FIXED +0.0647  (meanGain)
+       pf:  PHASE 0.0653  BQ10 0.0550  BQ50 0.0551  FIXED 0.0552
+       commits: PHASE 458 (μ/ph 45.8 max 72)  BQ10 163 (μ/ph 16.3 max 26)  BQ50 402 (μ/ph 40.2 max 80)
+       melts (young/total): PHASE 206/396  BQ10 104/114  BQ50 187/338
+
+C0 canary reproduction (PHASE@150 == E0d committed):   gain +0.4067 melts 218  [PASS]
+R1 short-window win (BQ50>PHASE at 15 and 40): -0.0739/+0.0401 vs -0.0903/+0.0205  [PASS]
+R2 long-L melt-collapse band (BQ50(150) melts >= 0.85·PHASE(150)): 63 vs 218  [FAIL] (expected FAIL by declared arithmetic)
+R3 mid-L quota keeps the burst win (BQ50(40) >= BURST_A(40) − 5% = 0.1303): +0.0401  [FAIL]
+R4 quota-unbound identity at 150 (BQ10 == BQ50 on commits/melts): (112, 48) vs (127, 63)  [FAIL]
+R5a drain+quota signature at 15 (2 <= BQ50 commits_phase_max <= 8): 12  [FAIL]
+R5b quota consumption at 40 (15 <= BQ50 commits_phase_mean <= 20): 35.60  [FAIL]

@@ -582,3 +582,86 @@ function decide(controller::BurstCommitController, snapshot::FPSnapshot)::Lifecy
 
     return NO_ACTION
 end
+
+"""
+    BurstQuotaController(k_commit=2; burst_fraction=1.0, quota_fraction=0.5)
+
+E0i (Pass 3f): burst-within-quota composite budget. E0g-D1 pinned the short-L
+constraint on within-burst pacing (the per-phase VOLUME quota never consumed
+at L=15); E0h-D2 showed the pure burst lever is threshold-like at short L
+(0.5·W inert, 1.0·W reproduces TAGR) and toxic at long L (melts collapse —
+churn pacing is the carrier of the large-L gain). E0i composes the two shapes:
+
+  cap(tick) = max(1, floor(burst_fraction · W))   if quota open, else 0
+  quota_open  ⇔ live-stamp commits this phase < ceil(quota_fraction · L)
+
+The per-tick admission is a burst drain (bounded rate, canonical order, E0h
+machinery); the burst drain itself is capped per phase by a live-stamp quota
+(E0g machinery, melts refund — the counter is net commits − melts since phase
+start). Per-site rule byte-exact PHASE; melts untouched.
+
+Note the refund asymmetry: a burst drain admits MANY commits in one tick, and
+if the freshly committed material melts later in the same phase, the live-stamp
+counter falls and the quota re-opens — a gross-count ceiling would not. This is
+inherited deliberately from E0g (stateless single-source-of-truth) and makes
+the composite SOFTER at long L than the preregistered gross ceiling the R2
+check is written against.
+
+Calibration (committed rows): BURST_A per-phase demand 10.0/40.6/43.0/12.7 at
+L=15/40/75/150 vs PHASE 5.1/28.8/45.8/28.2 — non-monotonic in L, while any
+constant-fraction quota is linear. A quota feeding short L (≥ 8 at L=15)
+cannot bind at long L (needs < 13 at L=150): the composite maps a trade-off
+LINE rather than a free win, and the preregistration declares its endpoints.
+
+Defaults: `burst_fraction = 1.0` (E0h-D2: only the full batch moves short L;
+sub-batch drains are inert there) and `quota_fraction = 0.5` (E0g's arm;
+Q = 8/20/38/75). Position-gated, so undeclared-L is a HardFailure like QUOTA.
+"""
+struct BurstQuotaController <: DCP
+    k_commit::Int32
+    burst_fraction::Float32
+    quota_fraction::Float32
+    function BurstQuotaController(k_commit::Integer=2;
+                                  burst_fraction::Real=1.0,
+                                  quota_fraction::Real=0.5)
+        k_commit >= 1 ||
+            error("HardFailure: BurstQuotaController k_commit must be >= 1")
+        bf = Float32(burst_fraction)
+        isfinite(bf) && 0.0f0 < bf <= 1.0f0 ||
+            error("HardFailure: BurstQuotaController burst_fraction must be in (0,1], got $bf")
+        qf = Float32(quota_fraction)
+        isfinite(qf) && 0.0f0 < qf <= 1.0f0 ||
+            error("HardFailure: BurstQuotaController quota_fraction must be in (0,1], got $qf")
+        new(Int32(k_commit), bf, qf)
+    end
+end
+
+const BURST_QUOTA_CONTROLLER = BurstQuotaController()
+
+function decide(controller::BurstQuotaController, snapshot::FPSnapshot)::LifecycleAction
+    # Position gating is mandatory: the live-stamp phase quota is meaningless
+    # without a declared phase length (no silent degeneration).
+    snapshot.phase_length > 0 ||
+        error("HardFailure: BurstQuotaController requires a declared positive region phase_length")
+
+    # Committed sites: identical invalidation to the phase machine — the
+    # composite varies ONLY the budget shape, so anti-ossification strength
+    # is unchanged by construction.
+    if snapshot.allocated && !snapshot.superplastic
+        if snapshot.commit_sign != 0 &&
+           snapshot.consecutive_conflicted >= snapshot.conflict_k
+            snapshot.melt_budget_available || return NO_ACTION
+            return MeltAction(snapshot.site_index)
+        end
+        return NO_ACTION
+    end
+
+    # Plastic sites: the decision is EXACTLY the phase machine's (settle +
+    # dwell, no remission, melt margin). Any behavioral difference comes from
+    # the kernel's composite budget, not from the per-site rule.
+    if snapshot.allocated && snapshot.superplastic
+        return _plastic_commit_decision(snapshot, controller.k_commit, false)
+    end
+
+    return NO_ACTION
+end

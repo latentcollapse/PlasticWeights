@@ -168,12 +168,45 @@ function reference_material_tick!(substrate::SubstrateState,
         burst_cap = _burst_allowance(dcp.burst_fraction,
             count(a -> a isa CommitAction, intents))
     end
+    # E0i (burst-within-quota composite): the burst drain is admitted only
+    # while the live-stamp phase quota is OPEN, and the per-tick admission is
+    # bounded by the REMAINING quota as well as the burst cap:
+    #   cap(tick) = min( max(1, floor(bf·W)), Q − spent )   if spent < Q, else 0
+    # The min is essential: without it, the first tick of a burst admits all W
+    # intents (bf = 1.0) and only LATER ticks are gated — the E0b2 coordinated
+    # wave, which the budget exists to prevent. Admission is thus bounded per
+    # tick (burst machinery + remaining quota) AND per phase (quota machinery,
+    # melts refund). The intent pass runs only when the quota is open (a
+    # closed-quota budget of 0 needs no W).
+    bquota_cap = 0
+    if dcp isa BurstQuotaController
+        declared_L = phase_length > 0 ? phase_length :
+                     Int(substrate.region_map.regions[1].phase_length)
+        spent = _commits_this_phase(substrate, declared_L, tick)
+        remaining = Int(_phase_quota_ticks(dcp.quota_fraction, Int32(declared_L))) - spent
+        if remaining > 0
+            intents = Vector{LifecycleAction}(undef, n)
+            for i in eachindex(substrate.sites)
+                site = substrate.sites[i]
+                region = get_region_for_site(substrate.region_map, i)
+                budget_available =
+                    reserved_melts < free_now &&
+                    current_superplastic + reserved_melts < Int(substrate.max_superplastic)
+                snap = create_snapshot(i, region, site, substrate.telemetry[i],
+                    budget_available, tick; phase_length=phase_length)
+                intents[i] = decide(dcp, snap)
+            end
+            bquota_cap = min(_burst_allowance(dcp.burst_fraction,
+                count(a -> a isa CommitAction, intents)), remaining)
+        end
+    end
     commit_budget =
         dcp isa Union{PhaseMachineController, MeltRoutingController} ? 1 :
         dcp isa RegimeAdaptiveController ?
             (dcp.budgeted || !young_window ? 1 : typemax(Int)) :
         dcp isa PhaseQuotaController ? min(1, phase_quota_remaining) :
         dcp isa BurstCommitController ? burst_cap :
+        dcp isa BurstQuotaController ? bquota_cap :
         typemax(Int)
 
     for i in eachindex(substrate.sites)

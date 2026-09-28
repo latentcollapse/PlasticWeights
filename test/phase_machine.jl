@@ -1529,3 +1529,172 @@ end
     @test check_invariants(st1, mlp1)
     @test check_invariants(st2, mlp2)
 end
+
+# ---------------------------------------------------------------------------
+# E0i — burst-within-quota composite budget (Pass 3f).
+#
+# Contracts under test:
+#   1. Construction: both fractions validated in (0, 1], HardFailure otherwise.
+#   2. The commit decision is EXACTLY the phase machine's (settle + dwell +
+#      melt margin, NO remission) and the melt side too; position-gated
+#      (undeclared L is a HardFailure, like QUOTA).
+#   3. The composite cap is min(burst allowance, remaining quota) — the quota
+#      bounds the FIRST tick of a burst (the E0b2 wave is impossible), and
+#      whichever constraint is tighter binds.
+#   4. Exhaustion and refill: the live-stamp quota admits at most Q commits
+#      per phase and refills at the boundary.
+#   5. End-to-end determinism with the composite budget in the loop.
+#
+# Fixture gotchas (carried forward): settle accrues live (tick 1 commits 0,
+# k_settle = 2 reached on tick 2); budget denial keeps counters.
+# ---------------------------------------------------------------------------
+@testset "E0i — BurstQuotaController construction" begin
+    @test BurstQuotaController(2).k_commit == Int32(2)
+    @test BurstQuotaController(2).burst_fraction == 1.0f0
+    @test BurstQuotaController(2).quota_fraction == 0.5f0
+    @test BurstQuotaController(2; burst_fraction=0.5, quota_fraction=0.25).burst_fraction == 0.5f0
+    @test BurstQuotaController(2; burst_fraction=0.5, quota_fraction=0.25).quota_fraction == 0.25f0
+    @test_throws ErrorException BurstQuotaController(0)
+    @test_throws ErrorException BurstQuotaController(2; burst_fraction=0.0)
+    @test_throws ErrorException BurstQuotaController(2; quota_fraction=0.0)
+    @test_throws ErrorException BurstQuotaController(2; quota_fraction=1.5)
+end
+
+@testset "E0i — commit and melt decisions are the phase machine's; undeclared L fails" begin
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)             # aligned tag: remission arms would fire
+        st.plastic_since = Int32(plastic_since)
+        t = s.telemetry[1]
+        t.consecutive_stable = Int32(2)
+        t.stress_ema = 0.05f0
+        t.signed_stress_ema = 0.05f0
+        return (s, create_snapshot(1, s.region_map.regions[1], st, t, true, tick))
+    end
+    # Young window, plastic age 1 < k_commit: refused — the composite carries
+    # NO remission (only the budget shape differs from the phase machine).
+    s, snap = mk(11, 10)
+    @test decide(BURST_QUOTA_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction   # the contrast
+    # Age 2: fires, identical to the phase machine.
+    s, snap = mk(12, 10)
+    @test action_code(decide(BURST_QUOTA_CONTROLLER, snap)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap))
+    @test decide(BURST_QUOTA_CONTROLLER, snap) isa CommitAction
+
+    # Committed side: certificate + melt budget exactly the phase machine's
+    # (hand-stamp the reference: consolidated fixtures carry commit_sign = 0).
+    mkc = () -> begin
+        s = initialize_fp_consolidated_substrate(64; region_size=64,
+            initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+        site = s.sites[1]
+        site.commit_sign = Int8(1)
+        site.commit_stress = 0.5f0
+        site.consolidation_tick = Int32(5)
+        t = s.telemetry[1]
+        t.stress_ema = 0.6f0
+        t.signed_stress_ema = -0.6f0        # sustained consistent OPPOSED load
+        t.consecutive_conflicted = Int32(2)
+        return (s, create_snapshot(1, s.region_map.regions[1], site, t, true, 11))
+    end
+    s, snap = mkc()
+    @test decide(BURST_QUOTA_CONTROLLER, snap) isa MeltAction
+
+    # Undeclared L: HardFailure at decide AND in the kernel's budget block.
+    free = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)   # no phase_length declared
+    fst = free.sites[1]
+    fst.commit_sign = Int8(1)
+    fst.plastic_since = Int32(10)
+    fsnap = create_snapshot(1, free.region_map.regions[1], fst,
+        free.telemetry[1], true, 11)
+    @test_throws ErrorException decide(BURST_QUOTA_CONTROLLER, fsnap)
+    @test_throws ErrorException reference_material_tick!(free, fill(0.01f0, 64),
+        NEWTONIAN, BURST_QUOTA_CONTROLLER, ZCS(); beta=0.5f0, gamma=0.5f0, tick=11)
+    # The phase machine is unaffected on the same state.
+    @test decide(PHASE_MACHINE_CONTROLLER, fsnap) isa NoAction
+end
+
+@testset "E0i — composite quota bounds the first burst tick and refills" begin
+    # All-settle seed (W = 64 at tick 2) under Q = 8 (L = 16, qf = 0.5):
+    # the composite must admit min(burst cap, remaining) — 8, NOT the E0b2
+    # 64-wave — then sit closed until the phase boundary refills it.
+    # burst_fraction = 1.0 is the STRONGER form: even the full batch admits
+    # only the remaining quota; bf = 0.5 gives burst cap 32, still above 8,
+    # so BOTH fractions must produce the same quota-bound pattern.
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    g = fill(0.01f0, 64)
+    for (name, dcp) in ((:bq_full, BurstQuotaController(2; burst_fraction=1.0)),
+                        (:bq_half, BurstQuotaController(2; burst_fraction=0.5)))
+        sub = mk()
+        counts = Int[]
+        for tick in 1:18
+            r = reference_material_tick!(sub, g, NEWTONIAN, dcp, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(counts, count(a -> a isa CommitAction, r.actions))
+        end
+        @test counts == [0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0]
+        @test all(counts .<= 8)                    # never above the quota
+        @test check_invariants(sub)
+    end
+
+    # When the burst cap is TIGHTER than the quota, the burst binds instead:
+    # bf = 0.1 on W = 64 → floor(6.4) = 6 < 8; tick 3 runs on the remaining 2.
+    sub = mk()
+    counts = Int[]
+    for tick in 1:4
+        r = reference_material_tick!(sub, g, NEWTONIAN,
+            BurstQuotaController(2; burst_fraction=0.1), ZCS();
+            beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(counts, count(a -> a isa CommitAction, r.actions))
+    end
+    @test counts == [0, 6, 2, 0]               # burst binds, then remaining
+end
+
+@testset "E0i — BQ end-to-end determinism with declared phase length" begin
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    N = num_material_sites(mlp)
+
+    mk_state = (m) -> initialize_material_training(m, initialize_fp_seed(N;
+        region_size=64, settle_down=0.0f0, eta=1.0f0,
+        hardening_increment=0.05f0, epsilon_delta=1.0f6,
+        k_yield=2, k_settle=2, phase_length=8))
+
+    # Defaults (bf = 1.0, qf = 0.5): Q = 4 per 8-tick phase — the quota BINDS
+    # against full-batch demand.
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=BURST_QUOTA_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+        phase_length=8,
+    )
+
+    X = Float32[1 -1; 1 -1]
+    Y = Float32[1 -1]
+
+    mlp1 = mlp
+    mlp2 = deepcopy(mlp)
+    st1 = mk_state(mlp1)
+    st2 = mk_state(mlp2)
+
+    for _ in 1:40
+        material_training_step!(mlp1, st1, X, Y, cfg)
+    end
+    for _ in 1:40
+        material_training_step!(mlp2, st2, X, Y, cfg)
+    end
+
+    fp1 = [_tpm_bits(Float32(x)) for x in vec(mlp1.H_FP32)]
+    fp2 = [_tpm_bits(Float32(x)) for x in vec(mlp2.H_FP32)]
+    @test fp1 == fp2
+    @test check_invariants(st1, mlp1)
+    @test check_invariants(st2, mlp2)
+end
