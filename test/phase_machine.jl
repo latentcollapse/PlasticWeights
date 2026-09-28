@@ -1300,3 +1300,232 @@ end
     @test check_invariants(st1, mlp1)
     @test check_invariants(st2, mlp2)
 end
+
+# ---------------------------------------------------------------------------
+# E0h — burst-width commit allowance (Pass 3e).
+#
+# Contracts under test:
+#   1. Construction: burst_fraction ∈ (0, 1], HardFailure otherwise.
+#   2. The commit decision is EXACTLY the phase machine's (settle + dwell +
+#      melt margin, NO remission) and the melt side too — the burst cap lives
+#      entirely in the kernel's budget shape.
+#   3. Kernel burst drain: the cap admits the leading intent sites in
+#      canonical order; denied sites keep their counters and re-intend. On
+#      the all-settle fixture the burst drains geometrically
+#      [32, 16, 8, 4, 2, 1, 1] — bounded-rate, never the E0b2 uncontrolled
+#      wave (per-tick admission is capped at ceil-of-half the burst).
+#   4. The single-intent floor: a lone intending site is admitted even when
+#      floor(burst_fraction · 1) = 0 (the floor alone would strand it).
+#   5. burst_fraction = 1.0 is batch admission bounded by the intent count —
+#      byte-identical to the frozen FixedRuleController on a settling seed
+#      ("TAGR minus remission" shape).
+#   6. Position-blind: no phase_length declaration is required (contrast
+#      QUOTA/REGIME HardFailures) and none changes the budget.
+#   7. End-to-end determinism with the burst cap in the loop.
+#
+# Fixture gotchas (carried forward): the all-settle seed commits 0 on tick 1
+# (settle accrues live, k_settle = 2 reached on tick 2); budget denial keeps
+# counters, so denied sites re-intend on the next tick.
+# ---------------------------------------------------------------------------
+@testset "E0h — BurstCommitController construction" begin
+    @test BurstCommitController(2).k_commit == Int32(2)
+    @test BurstCommitController(2).burst_fraction == 0.5f0
+    @test BurstCommitController(2; burst_fraction=1.0).burst_fraction == 1.0f0
+    @test_throws ErrorException BurstCommitController(0)
+    @test_throws ErrorException BurstCommitController(2; burst_fraction=0.0)
+    @test_throws ErrorException BurstCommitController(2; burst_fraction=1.5)
+    @test_throws ErrorException BurstCommitController(2; burst_fraction=NaN)
+end
+
+@testset "E0h — commit and melt decisions are the phase machine's" begin
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)             # aligned tag: remission arms would fire
+        st.plastic_since = Int32(plastic_since)
+        t = s.telemetry[1]
+        t.consecutive_stable = Int32(2)
+        t.stress_ema = 0.05f0
+        t.signed_stress_ema = 0.05f0
+        return (s, create_snapshot(1, s.region_map.regions[1], st, t, true, tick))
+    end
+    # Young window, plastic age 1 < k_commit: refused — BURST carries NO
+    # remission (only the budget shape differs from the phase machine).
+    s, snap = mk(11, 10)
+    @test decide(BURST_COMMIT_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction   # the contrast
+    # Age 2: fires, identical to the phase machine.
+    s, snap = mk(12, 10)
+    @test action_code(decide(BURST_COMMIT_CONTROLLER, snap)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap))
+    @test decide(BURST_COMMIT_CONTROLLER, snap) isa CommitAction
+
+    # Committed side: certificate + melt budget exactly the phase machine's
+    # (hand-stamp the reference: consolidated fixtures carry commit_sign = 0).
+    mkc = () -> begin
+        s = initialize_fp_consolidated_substrate(64; region_size=64,
+            initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+        site = s.sites[1]
+        site.commit_sign = Int8(1)
+        site.commit_stress = 0.5f0
+        site.consolidation_tick = Int32(5)
+        t = s.telemetry[1]
+        t.stress_ema = 0.6f0
+        t.signed_stress_ema = -0.6f0        # sustained consistent OPPOSED load
+        t.consecutive_conflicted = Int32(2)
+        return (s, create_snapshot(1, s.region_map.regions[1], site, t, true, 11))
+    end
+    s, snap = mkc()
+    @test decide(BURST_COMMIT_CONTROLLER, snap) isa MeltAction
+    s, snap = mkc()
+    snap = create_snapshot(1, s.region_map.regions[1], s.sites[1],
+        s.telemetry[1], false, 11)
+    @test decide(BURST_COMMIT_CONTROLLER, snap) isa NoAction
+end
+
+@testset "E0h — kernel burst drains geometrically in canonical order" begin
+    # All-settle seed under a small consistent load: on tick 2 every site
+    # intends (W = 64), so BURST(0.5) admits 32, then 16, 8, 4, 2, 1, 1 —
+    # the burst drains geometrically and every admitted site had intended.
+    # PHASE admits the same stream at 1/tick; the leading sites coincide.
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    g = fill(0.01f0, 64)
+    sub = mk()
+    counts = Int[]
+    first_tick2_commits = Int32[]
+    for tick in 1:8
+        r = reference_material_tick!(sub, g, NEWTONIAN, BURST_COMMIT_CONTROLLER,
+            ZCS(); beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(counts, count(a -> a isa CommitAction, r.actions))
+        tick == 2 &&
+            (first_tick2_commits = [a.site_index for a in r.actions if a isa CommitAction])
+    end
+    @test counts == [0, 32, 16, 8, 4, 2, 1, 1]      # geometric drain
+    @test first_tick2_commits == Int32.(1:32)       # canonical order, leading cap
+    @test sum(counts) == 64
+    @test all(counts .<= 32)                        # bounded-rate, not the E0b2 wave
+    @test check_invariants(sub)
+
+    # The phase machine on the same fixture: 1/tick, same leading sites.
+    phsub = mk()
+    ph = Int[]
+    for tick in 1:6
+        r = reference_material_tick!(phsub, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER,
+            ZCS(); beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(ph, count(a -> a isa CommitAction, r.actions))
+    end
+    @test ph == [0, 1, 1, 1, 1, 1]
+    @test sum(counts[1:6]) >= 3 * sum(ph)           # the drain lifts the rate
+end
+
+@testset "E0h — single-intent floor admits a lone intending site" begin
+    # Site 1's certificate is saturated and its load is EXACT zero (certifies
+    # immediately); every other site sees alternating ±2e6 load, which NEVER
+    # certifies: the first sample is inconsistent against the zero-seed EMA
+    # (|2e6 − 0| > epsilon_delta = 1e6) and every later sample breaks
+    # consistency again (|Δg| = 4e6). So the tick-1 burst has W = 1 and
+    # floor(0.5 · 1) = 0 — without the max(1, ·) floor the lone intending
+    # site would be stranded forever (its counters persist, but no later
+    # burst ever forms under this load). It must be admitted at tick 1;
+    # afterwards nobody else ever certifies, so the run goes silent —
+    # proving W = 1 was the only intent.
+    sub = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    t1 = sub.telemetry[1]
+    t1.consecutive_stable = Int32(2)
+    r1 = reference_material_tick!(sub, vcat(0.0f0, fill(2.0f6, 63)), NEWTONIAN,
+        BURST_COMMIT_CONTROLLER, ZCS(); beta=0.5f0, gamma=0.5f0, tick=1)
+    @test count(a -> a isa CommitAction, r1.actions) == 1
+    @test r1.actions[1] isa CommitAction && r1.actions[1].site_index == Int32(1)
+    r2 = reference_material_tick!(sub, vcat(0.0f0, fill(-2.0f6, 63)), NEWTONIAN,
+        BURST_COMMIT_CONTROLLER, ZCS(); beta=0.5f0, gamma=0.5f0, tick=2)
+    @test count(a -> a isa CommitAction, r2.actions) == 0
+    r3 = reference_material_tick!(sub, vcat(0.0f0, fill(2.0f6, 63)), NEWTONIAN,
+        BURST_COMMIT_CONTROLLER, ZCS(); beta=0.5f0, gamma=0.5f0, tick=3)
+    @test count(a -> a isa CommitAction, r3.actions) == 0
+    @test check_invariants(sub)
+end
+
+@testset "E0h — burst_fraction 1.0 is the frozen batch shape (TAGR minus remission)" begin
+    # On a settling seed the unbounded burst admits every intent site in one
+    # tick — byte-identical action streams to the FixedRuleController's frozen
+    # batch-commit contract. This isolates E0d mechanism A: the ADMISSION
+    # SHAPE, without any dwell remission.
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=16)
+    g = fill(0.01f0, 64)
+    prints = Dict{Symbol,Vector{Vector{Tuple{Symbol,Int32}}}}()
+    for (name, dcp) in ((:burst, BurstCommitController(2; burst_fraction=1.0)),
+                        (:fixed, FIXED_RULE_CONTROLLER))
+        sub = mk()
+        prints[name] = Vector{Tuple{Symbol,Int32}}[]
+        for tick in 1:4
+            r = reference_material_tick!(sub, g, NEWTONIAN, dcp, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(prints[name], action_code.(r.actions))
+        end
+        @test check_invariants(sub)
+    end
+    @test prints[:burst] == prints[:fixed]
+end
+
+@testset "E0h — burst budget is position-blind (undeclared L is legal)" begin
+    # No phase_length declared anywhere: QUOTA and REGIME HardFail here, the
+    # burst arm cannot — its cap never consults the declaration.
+    sub = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)   # no phase_length kwarg
+    g = fill(0.01f0, 64)
+    counts = Int[]
+    for tick in 1:4
+        r = reference_material_tick!(sub, g, NEWTONIAN, BURST_COMMIT_CONTROLLER,
+            ZCS(); beta=0.5f0, gamma=0.5f0, tick=tick)
+        push!(counts, count(a -> a isa CommitAction, r.actions))
+    end
+    @test counts == [0, 32, 16, 8]
+    @test check_invariants(sub)
+end
+
+@testset "E0h — BURST end-to-end determinism with declared phase length" begin
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    N = num_material_sites(mlp)
+
+    mk_state = (m) -> initialize_material_training(m, initialize_fp_seed(N;
+        region_size=64, settle_down=0.0f0, eta=1.0f0,
+        hardening_increment=0.05f0, epsilon_delta=1.0f6,
+        k_yield=2, k_settle=2, phase_length=8))
+
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=BURST_COMMIT_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+        phase_length=8,
+    )
+
+    X = Float32[1 -1; 1 -1]
+    Y = Float32[1 -1]
+
+    mlp1 = mlp
+    mlp2 = deepcopy(mlp)
+    st1 = mk_state(mlp1)
+    st2 = mk_state(mlp2)
+
+    for _ in 1:40
+        material_training_step!(mlp1, st1, X, Y, cfg)
+    end
+    for _ in 1:40
+        material_training_step!(mlp2, st2, X, Y, cfg)
+    end
+
+    fp1 = [_tpm_bits(Float32(x)) for x in vec(mlp1.H_FP32)]
+    fp2 = [_tpm_bits(Float32(x)) for x in vec(mlp2.H_FP32)]
+    @test fp1 == fp2
+    @test check_invariants(st1, mlp1)
+    @test check_invariants(st2, mlp2)
+end

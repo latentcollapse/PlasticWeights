@@ -1,0 +1,54 @@
+================================================================================================================================
+E0h — burst-width commit allowance (Pass 3e): within-burst admission, PHASE commit rule — preregistered [mode: checks]
+================================================================================================================================
+
+================================================================================================================================
+ALL CACHED ROWS
+================================================================================================================================
+PHASE    L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 (y 24/d 27) M=  46 (y 21/d 25) | tickC max=  1 ticks=  51
+BURST    L= 15 | pf= 0.3239 retM= 0.7888 gain=-0.0912 | hot= 0.89 jump=0.280 | C=  60 (y 33/d 27) M=  48 (y 24/d 24) | tickC max=  3 ticks=  56
+BURST_A  L= 15 | pf= 0.2798 retM= 0.8764 gain=+0.1226 | hot= 0.82 jump=0.226 | C= 100 (y 67/d 33) M=  73 (y 44/d 29) | tickC max=  8 ticks=  49
+FIXED    L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 (y 28/d 13) M=   7 (y  6/d  1) | tickC max=  6 ticks=  25
+PHASE    L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 (y142/d146) M= 248 (y120/d128) | tickC max=  1 ticks= 288
+BURST    L= 40 | pf= 0.0865 retM= 0.8573 gain=+0.1241 | hot= 0.47 jump=0.622 | C= 451 (y194/d257) M= 393 (y207/d186) | tickC max=  7 ticks= 251
+BURST_A  L= 40 | pf= 0.0851 retM= 0.8745 gain=+0.1372 | hot= 0.40 jump=0.572 | C= 406 (y175/d231) M= 345 (y180/d165) | tickC max= 12 ticks= 145
+FIXED    L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 (y 22/d 48) M=   6 (y  3/d  3) | tickC max=  6 ticks=  36
+PHASE    L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190) | tickC max=  1 ticks= 458
+BURST    L= 75 | pf= 0.0650 retM= 0.8505 gain=+0.0335 | hot= 0.33 jump=0.544 | C= 475 (y222/d253) M= 414 (y197/d217) | tickC max=  8 ticks= 335
+BURST_A  L= 75 | pf= 0.0551 retM= 0.8493 gain=+0.0720 | hot= 0.28 jump=0.548 | C= 430 (y240/d190) M= 368 (y190/d178) | tickC max= 19 ticks= 173
+FIXED    L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 (y 35/d 35) M=   6 (y  6/d  0) | tickC max=  7 ticks=  33
+PHASE    L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22) | tickC max=  1 ticks= 282
+BURST    L=150 | pf= 0.0133 retM= 0.8542 gain=+0.2278 | hot= 0.13 jump=0.602 | C= 157 (y109/d 48) M=  93 (y 71/d 22) | tickC max=  9 ticks= 105
+BURST_A  L=150 | pf= 0.0112 retM= 0.8536 gain=+0.3254 | hot= 0.08 jump=0.765 | C= 127 (y 33/d 94) M=  63 (y 27/d 36) | tickC max=  8 ticks=  51
+FIXED    L=150 | pf= 0.0116 retM= 0.8689 gain=+0.3215 | hot= 0.07 jump=0.672 | C=  71 (y 13/d 58) M=   7 (y  7/d  0) | tickC max=  8 ticks=  31
+
+================================================================================================================================
+PREREGISTERED RESULT CHECKS (evaluated on available rows)
+================================================================================================================================
+
+L=15:  PHASE -0.0903  BURST -0.0912  BURST_A +0.1226  FIXED -0.0572  (meanGain)
+       pf:  PHASE 0.3112  BURST 0.3239  BURST_A 0.2798  FIXED 0.3050
+       commits: PHASE 51 (tickCmax 1)  BURST 60 (tickCmax 3)  BURST_A 100 (tickCmax 8)
+       melts (young/total): PHASE 21/46  BURST 24/48  BURST_A 44/73
+
+L=40:  PHASE +0.0205  BURST +0.1241  BURST_A +0.1372  FIXED +0.1618  (meanGain)
+       pf:  PHASE 0.0863  BURST 0.0865  BURST_A 0.0851  FIXED 0.0849
+       commits: PHASE 288 (tickCmax 1)  BURST 451 (tickCmax 7)  BURST_A 406 (tickCmax 12)
+       melts (young/total): PHASE 120/248  BURST 207/393  BURST_A 180/345
+
+L=75:  PHASE +0.0461  BURST +0.0335  BURST_A +0.0720  FIXED +0.0647  (meanGain)
+       pf:  PHASE 0.0653  BURST 0.0650  BURST_A 0.0551  FIXED 0.0552
+       commits: PHASE 458 (tickCmax 1)  BURST 475 (tickCmax 8)  BURST_A 430 (tickCmax 19)
+       melts (young/total): PHASE 206/396  BURST 197/414  BURST_A 190/368
+
+L=150:  PHASE +0.4067  BURST +0.2278  BURST_A +0.3254  FIXED +0.3215  (meanGain)
+       pf:  PHASE 0.0132  BURST 0.0133  BURST_A 0.0112  FIXED 0.0116
+       commits: PHASE 282 (tickCmax 1)  BURST 157 (tickCmax 9)  BURST_A 127 (tickCmax 8)
+       melts (young/total): PHASE 196/218  BURST 71/93  BURST_A 27/63
+
+C0 canary reproduction (PHASE@150 == E0d committed):   gain +0.4067 melts 218  [PASS]
+R1 short-window win (BURST>PHASE at 15 and 40): -0.0912/+0.1241 vs -0.0903/+0.0205  [FAIL]
+R2 long-window non-toxicity (BURST(150) >= PHASE(150) − 5%): +0.2278 vs +0.4067  [FAIL]
+R3 mechanism decomposition (|BURST_A−TAGR| 0.0000 < |PHASE−TAGR| 0.2128 at 15):  [PASS]
+R4 ablation (BURST_A(15) > PHASE(15)): +0.1226 vs -0.0903  [PASS]
+R5 drain signature (BURST max single-tick commits >= 2 at 15 and 150): 3/9  [PASS]

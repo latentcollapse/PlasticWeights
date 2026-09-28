@@ -141,11 +141,39 @@ function reference_material_tick!(substrate::SubstrateState,
         phase_quota_remaining =
             max(0, Int(_phase_quota_ticks(dcp.quota_fraction, Int32(declared_L))) - spent)
     end
+    # E0h (burst-width allowance): admission is shaped WITHIN the tick's own
+    # commit burst. `burst_fraction` scales a cap off the RAW intent count W —
+    # the number of sites whose decision is a CommitAction before budget
+    # truncation — observed statelessly in a discarded intent pass (decide()
+    # is pure, snapshots immutable, so the pass cannot perturb state). The
+    # cap is POSITION-BLIND: no phase_length declaration is consulted.
+    # E0h-R0 discipline: the budget is computed BEFORE the admission loop for
+    # every arm and the loop applies one truncation pass for every arm; arms
+    # whose budget cannot truncate (PHASE/MROUTE: 1; TAGR/UNDIR/REGIME
+    # unbudgeted: typemax; QUOTA: min(1, remaining); BURST: the burst cap)
+    # therefore remain bit-exactly as previously committed.
+    burst_cap = 0
+    if dcp isa BurstCommitController
+        intents = Vector{LifecycleAction}(undef, n)
+        for i in eachindex(substrate.sites)
+            site = substrate.sites[i]
+            region = get_region_for_site(substrate.region_map, i)
+            budget_available =
+                reserved_melts < free_now &&
+                current_superplastic + reserved_melts < Int(substrate.max_superplastic)
+            snap = create_snapshot(i, region, site, substrate.telemetry[i],
+                budget_available, tick; phase_length=phase_length)
+            intents[i] = decide(dcp, snap)
+        end
+        burst_cap = _burst_allowance(dcp.burst_fraction,
+            count(a -> a isa CommitAction, intents))
+    end
     commit_budget =
         dcp isa Union{PhaseMachineController, MeltRoutingController} ? 1 :
         dcp isa RegimeAdaptiveController ?
             (dcp.budgeted || !young_window ? 1 : typemax(Int)) :
         dcp isa PhaseQuotaController ? min(1, phase_quota_remaining) :
+        dcp isa BurstCommitController ? burst_cap :
         typemax(Int)
 
     for i in eachindex(substrate.sites)

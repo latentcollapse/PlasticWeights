@@ -498,3 +498,87 @@ function decide(controller::UndirectedController, snapshot::FPSnapshot)::Lifecyc
 
     return NO_ACTION
 end
+
+"""
+    BurstCommitController(k_commit=2; burst_fraction=0.5)
+
+E0h (Pass 3e): burst-width commit allowance. E0g-D1 pinned the short-L
+deficit: per-phase VOLUME is not the constraint (the phase machine spends
+~5.1 commits/phase at L=15 against a quota of 8 — the quota never bound);
+the binding constraint is the 1/tick PACING across the BURST STRUCTURE of
+settle-certificate arrivals (up to 12 commit-intent sites crowd into a single
+short phase, all gated to one per tick). This controller shapes admission
+WITHIN each tick's burst instead of across the phase:
+
+  cap(tick) = max(1, floor(burst_fraction · W)),   W = raw commit-intent count
+
+W is the number of sites whose DCP decision is a CommitAction before budget
+truncation (the kernel observes it in a discarded intent pass — decide() is
+pure, snapshots immutable). The kernel admits the leading `cap` intent sites
+in canonical order and denies the rest, which keep their persistent counters.
+Per-tick admission stays ≤ W (and ≥ 1 for any nonempty burst), so this is a
+bounded-rate stream, not the E0b2 coordinated wave.
+
+The per-site commit rule is EXACTLY the phase machine's (settle + dwell
+`k_commit` + melt margin, NO remission) and the melt side is untouched — the
+only change is the budget shape. `burst_fraction = 1.0` admits every intent
+site and is the "TAGR minus remission" ablation: if it reproduces TAGR's
+short-L gain, the carrier was the batch ADMISSION SHAPE, not dwell remission
+(E0h's adjudication of E0d mechanism A). `burst_fraction → 0` degenerates to
+the phase machine's 1/tick.
+
+Unlike the position-gated arms, burst admission is POSITION-BLIND: no
+phase_length declaration is required and none is consulted — the budget is a
+function of the tick's own intent count alone (undeclared-L substrates are
+legal for this arm by design).
+"""
+struct BurstCommitController <: DCP
+    k_commit::Int32
+    burst_fraction::Float32
+    function BurstCommitController(k_commit::Integer=2;
+                                   burst_fraction::Real=0.5)
+        k_commit >= 1 ||
+            error("HardFailure: BurstCommitController k_commit must be >= 1")
+        bf = Float32(burst_fraction)
+        isfinite(bf) && 0.0f0 < bf <= 1.0f0 ||
+            error("HardFailure: BurstCommitController burst_fraction must be in (0,1], got $bf")
+        new(Int32(k_commit), bf)
+    end
+end
+
+const BURST_COMMIT_CONTROLLER = BurstCommitController()
+
+"""E0h burst admission cap for a tick whose raw commit-intent count is `W`:
+`max(1, floor(burst_fraction · W))` — the leading `cap` intent sites in
+canonical order are admitted this tick, the rest are denied and keep their
+counters. `burst_fraction = 1.0` admits every intent site; fractional caps
+keep admission ≤ W by construction and ≥ 1 whenever the burst is nonempty
+(a single intent site is always admitted — the floor alone would strand it)."""
+function _burst_allowance(burst_fraction::Float32, W::Integer)::Int
+    W >= 1 || return 0
+    cap = floor(Float64(burst_fraction) * Float64(W))
+    return cap >= 1 ? Int(cap) : 1
+end
+
+function decide(controller::BurstCommitController, snapshot::FPSnapshot)::LifecycleAction
+    # Committed sites: identical invalidation to the phase machine — the
+    # burst arm varies ONLY the budget shape, so anti-ossification strength
+    # is unchanged by construction.
+    if snapshot.allocated && !snapshot.superplastic
+        if snapshot.commit_sign != 0 &&
+           snapshot.consecutive_conflicted >= snapshot.conflict_k
+            snapshot.melt_budget_available || return NO_ACTION
+            return MeltAction(snapshot.site_index)
+        end
+        return NO_ACTION
+    end
+
+    # Plastic sites: the decision is EXACTLY the phase machine's (settle +
+    # dwell, no remission, melt margin). Any behavioral difference comes from
+    # the kernel's burst cap, not from the per-site rule.
+    if snapshot.allocated && snapshot.superplastic
+        return _plastic_commit_decision(snapshot, controller.k_commit, false)
+    end
+
+    return NO_ACTION
+end
