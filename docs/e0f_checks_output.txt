@@ -1,0 +1,50 @@
+======================================================================================================================
+E0f — melt-side routing (Pass 3c): young melt acceleration, PHASE commit side — preregistered [mode: checks]
+======================================================================================================================
+
+======================================================================================================================
+ALL CACHED ROWS
+======================================================================================================================
+PHASE    L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 (y 24/d 27) M=  46 (y 21/d 25)
+MROUTE   L= 15 | pf= 0.3111 retM= 0.7611 gain=-0.0904 | hot= 0.93 jump=0.260 | C=  53 (y 24/d 29) M=  47 (y 26/d 21)
+MROUTE_A L= 15 | pf= 0.3102 retM= 0.8749 gain=-0.1056 | hot= 0.92 jump=0.254 | C=  53 (y 25/d 28) M=  42 (y 23/d 19)
+FIXED    L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 (y 28/d 13) M=   7 (y  6/d  1)
+PHASE    L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 (y142/d146) M= 248 (y120/d128)
+MROUTE   L= 40 | pf= 0.0857 retM= 0.8407 gain=+0.0525 | hot= 0.71 jump=0.528 | C= 286 (y141/d145) M= 248 (y131/d117)
+MROUTE_A L= 40 | pf= 0.0855 retM= 0.8389 gain=+0.0015 | hot= 0.66 jump=0.534 | C= 282 (y137/d145) M= 224 (y101/d123)
+FIXED    L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 (y 22/d 48) M=   6 (y  3/d  3)
+PHASE    L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 (y231/d227) M= 396 (y206/d190)
+MROUTE   L= 75 | pf= 0.0653 retM= 0.8435 gain=+0.0340 | hot= 0.50 jump=0.564 | C= 455 (y234/d221) M= 398 (y239/d159)
+MROUTE_A L= 75 | pf= 0.0654 retM= 0.8395 gain=-0.0093 | hot= 0.53 jump=0.548 | C= 446 (y232/d214) M= 388 (y198/d190)
+FIXED    L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 (y 35/d 35) M=   6 (y  6/d  0)
+PHASE    L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 (y219/d 63) M= 218 (y196/d 22)
+MROUTE   L=150 | pf= 0.0132 retM= 0.8580 gain=+0.4079 | hot= 0.23 jump=0.615 | C= 289 (y253/d 36) M= 225 (y210/d 15)
+MROUTE_A L=150 | pf= 0.0132 retM= 0.8507 gain=+0.4082 | hot= 0.25 jump=0.640 | C= 317 (y269/d 48) M= 253 (y221/d 32)
+FIXED    L=150 | pf= 0.0116 retM= 0.8689 gain=+0.3215 | hot= 0.07 jump=0.672 | C=  71 (y 13/d 58) M=   7 (y  7/d  0)
+
+======================================================================================================================
+PREREGISTERED RESULT CHECKS (evaluated on available rows)
+======================================================================================================================
+
+L=15:  PHASE -0.0903  MROUTE -0.0904  MROUTE_A -0.1056  FIXED -0.0572  (meanGain)
+       pf:  PHASE 0.3112  MROUTE 0.3111  MROUTE_A 0.3102  FIXED 0.3050
+       melts (young/total): PHASE 21/46  MROUTE 26/47  MROUTE_A 23/42 | commits: PHASE 51  MROUTE 53  MROUTE_A 53
+
+L=40:  PHASE +0.0205  MROUTE +0.0525  MROUTE_A +0.0015  FIXED +0.1618  (meanGain)
+       pf:  PHASE 0.0863  MROUTE 0.0857  MROUTE_A 0.0855  FIXED 0.0849
+       melts (young/total): PHASE 120/248  MROUTE 131/248  MROUTE_A 101/224 | commits: PHASE 288  MROUTE 286  MROUTE_A 282
+
+L=75:  PHASE +0.0461  MROUTE +0.0340  MROUTE_A -0.0093  FIXED +0.0647  (meanGain)
+       pf:  PHASE 0.0653  MROUTE 0.0653  MROUTE_A 0.0654  FIXED 0.0552
+       melts (young/total): PHASE 206/396  MROUTE 239/398  MROUTE_A 198/388 | commits: PHASE 458  MROUTE 455  MROUTE_A 446
+
+L=150:  PHASE +0.4067  MROUTE +0.4079  MROUTE_A +0.4082  FIXED +0.3215  (meanGain)
+       pf:  PHASE 0.0132  MROUTE 0.0132  MROUTE_A 0.0132  FIXED 0.0116
+       melts (young/total): PHASE 196/218  MROUTE 210/225  MROUTE_A 221/253 | commits: PHASE 282  MROUTE 289  MROUTE_A 317
+
+C0 canary reproduction (PHASE@150 == E0d committed):   gain +0.4067 melts 218  [PASS]
+R1 short-window win (MROUTE>PHASE at 15 and 40): -0.0904/+0.0525 vs -0.0903/+0.0205  [FAIL]
+R2 long-window parity (MROUTE(150) >= PHASE(150) − 5%):        +0.4079 vs +0.4067  [PASS]
+R3 timing-not-volume (|MROUTE−PHASE| melts <= 15% at 150):    225 vs 218  [PASS]
+R4 melt-lever safety (MROUTE_A(150) >= PHASE(150) − 5%):      +0.4082 vs +0.4067  [PASS]
+R5 E0e-D2 premise (PHASE(150) young melt fraction > 0.5):      196/218 = 0.90  [PASS]

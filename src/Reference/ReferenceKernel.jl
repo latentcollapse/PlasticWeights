@@ -128,7 +128,7 @@ function reference_material_tick!(substrate::SubstrateState,
         young_window = _regime_young_phase(dcp, declared_L, tick)
     end
     commit_budget =
-        dcp isa PhaseMachineController ? 1 :
+        dcp isa Union{PhaseMachineController, MeltRoutingController} ? 1 :
         dcp isa RegimeAdaptiveController ?
             (dcp.budgeted || !young_window ? 1 : typemax(Int)) :
         typemax(Int)

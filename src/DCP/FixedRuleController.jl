@@ -162,6 +162,55 @@ function _regime_young_phase(controller::RegimeAdaptiveController,
     return tip < _young_boundary_ticks(controller.young_fraction, Int32(phase_length))
 end
 
+"""
+    MeltRoutingController(k_commit=2; young_fraction=0.5)
+
+E0f (Pass 3c): melt-side routing. E0e-D2 showed the deep window cannot be
+selected independently of the young one on the COMMIT side — young-window rule
+choices fork the whole phase trajectory — and located the open lever on the
+MELT side. This controller moves the lever while holding everything else at
+the phase machine's semantics:
+
+- **Commit side (unchanged everywhere):** exactly the phase machine's rule —
+  settle certificate + dwell (`k_commit`) + melt margin, no remission — and
+  the same 1/tick commit budget in BOTH windows (the kernel budgets this type
+  with the phase machine). Any effect is therefore attributable to melts.
+- **Melt side (the lever):** a committed site's conflict certificate fires at
+  an effective threshold `k_eff = 1` while the phase is YOUNG — one tick of
+  sustained, consistent, above-floor OPPOSED load invalidates immediately —
+  and at the phase machine's pace (`region.conflict_k`) once the phase is
+  deep. Direction sensitivity, the magnitude floor, and the melt budget gate
+  are the phase machine's, untouched.
+
+Rationale (E0e §4): PHASE's large-L advantage is downstream of letting
+young-window churn run; accelerating young invalidation should make the site
+population consolidate against the new task SOONER while the 1/tick commit
+cap keeps the recommit stream bounded — more churn events, same pacing.
+Acceleration is meaningful only when `conflict_k > 1` (otherwise the arm
+degrades to the phase machine by arithmetic). `young_fraction = 1.0` turns
+the acceleration on everywhere and serves as E0f's position-gating ablation
+(MROUTE_A): if it matches the half-phase arm, the effect is rate-level, not
+position-level (melts already concentrate in the young window — E0e-D2).
+
+Requires a declared phase length (`phase_length > 0`), HardFailure at
+decision time otherwise; the controller stays stateless.
+"""
+struct MeltRoutingController <: DCP
+    k_commit::Int32
+    young_fraction::Float32
+    function MeltRoutingController(k_commit::Integer=2;
+                                   young_fraction::Real=0.5)
+        k_commit >= 1 ||
+            error("HardFailure: MeltRoutingController k_commit must be >= 1")
+        yf = Float32(young_fraction)
+        isfinite(yf) && 0.0f0 < yf <= 1.0f0 ||
+            error("HardFailure: MeltRoutingController young_fraction must be in (0,1], got $yf")
+        new(Int32(k_commit), yf)
+    end
+end
+
+const MELT_ROUTING_CONTROLLER = MeltRoutingController()
+
 function decide(::FixedRuleController, snapshot::Snapshot)::LifecycleAction
     if snapshot.allocated && !snapshot.superplastic &&
        snapshot.consecutive_above_yield >= snapshot.k_yield &&
@@ -286,6 +335,36 @@ function decide(controller::RegimeAdaptiveController, snapshot::FPSnapshot)::Lif
         young = snapshot.ticks_into_phase <
                 _young_boundary_ticks(controller.young_fraction, snapshot.phase_length)
         return _plastic_commit_decision(snapshot, controller.k_commit, young)
+    end
+
+    return NO_ACTION
+end
+
+function decide(controller::MeltRoutingController, snapshot::FPSnapshot)::LifecycleAction
+    # Melt-side routing, like REGIME, needs the declared phase length.
+    snapshot.phase_length > 0 ||
+        error("HardFailure: MeltRoutingController requires a declared positive region phase_length")
+    young = snapshot.ticks_into_phase <
+            _young_boundary_ticks(controller.young_fraction, snapshot.phase_length)
+
+    # Committed sites: THE LEVER. The conflict certificate fires at k_eff = 1
+    # in the young window and at the phase machine's pace (conflict_k) deep.
+    # Everything else — direction condition, magnitude floor, melt budget —
+    # is the phase machine's.
+    if snapshot.allocated && !snapshot.superplastic
+        k_eff = young ? Int32(1) : snapshot.conflict_k
+        if snapshot.commit_sign != 0 &&
+           snapshot.consecutive_conflicted >= k_eff
+            snapshot.melt_budget_available || return NO_ACTION
+            return MeltAction(snapshot.site_index)
+        end
+        return NO_ACTION
+    end
+
+    # Plastic sites: the commit side is EXACTLY the phase machine's (dwell,
+    # no remission) — any behavioral difference is melt-side by construction.
+    if snapshot.allocated && snapshot.superplastic
+        return _plastic_commit_decision(snapshot, controller.k_commit, false)
     end
 
     return NO_ACTION

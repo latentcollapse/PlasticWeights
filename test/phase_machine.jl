@@ -839,3 +839,222 @@ end
     @test check_invariants(st1, mlp1)
     @test check_invariants(st2, mlp2)
 end
+
+# ---------------------------------------------------------------------------
+# E0f — melt-side routing (Pass 3c).
+#
+# Contracts under test:
+#   1. The melt lever: young-window conflict certificates fire at k_eff = 1;
+#      deep-window pace is the phase machine's (conflict_k). Direction
+#      condition, floor, and melt budget are untouched.
+#   2. The commit side is EXACTLY the phase machine's in both windows (dwell,
+#      no remission) and shares the 1/tick commit budget — any behavioral
+#      difference is melt-side by construction.
+#   3. Undeclared phase length is a HardFailure (no silent degeneration).
+#   4. End-to-end determinism with the melt lever in the loop.
+# ---------------------------------------------------------------------------
+@testset "E0f — MeltRoutingController construction" begin
+    @test MeltRoutingController(2).k_commit == Int32(2)
+    @test MeltRoutingController(2).young_fraction == 0.5f0
+    @test MeltRoutingController(2; young_fraction=1.0).young_fraction == 1.0f0
+    @test_throws ErrorException MeltRoutingController(0)
+    @test_throws ErrorException MeltRoutingController(2; young_fraction=0.0)
+    @test_throws ErrorException MeltRoutingController(2; young_fraction=1.5)
+end
+
+@testset "E0f — young melt acceleration; deep pace is the phase machine's" begin
+    mksub = () -> initialize_fp_consolidated_substrate(64; region_size=64,
+        initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+    mk = (tick, counter) -> begin
+        s = mksub()
+        site = s.sites[1]
+        site.commit_sign = Int8(1)          # consolidated under positive load
+        site.commit_stress = 0.5f0
+        site.consolidation_tick = Int32(5)
+        t = s.telemetry[1]
+        t.stress_ema = 0.6f0
+        t.signed_stress_ema = -0.6f0        # sustained consistent OPPOSED load
+        t.consecutive_conflicted = Int32(counter)
+        return (s, create_snapshot(1, s.region_map.regions[1], site, t, true, tick))
+    end
+
+    # Young window (tip 0 at tick 11): one accrued opposed tick melts NOW.
+    s, snap = mk(11, 1)
+    a = decide(MELT_ROUTING_CONTROLLER, snap)
+    @test a isa MeltAction && a.site_index == Int32(1)
+    # The phase machine on the SAME state: counter 1 < conflict_k = 2 — spares.
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+
+    # Deep window (tip 5 at tick 16): the pace is the phase machine's.
+    s, snap = mk(16, 1)
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    s, snap = mk(16, 2)
+    @test action_code(decide(MELT_ROUTING_CONTROLLER, snap)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap))
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa MeltAction
+
+    # Accelerate-everywhere ablation (young_fraction = 1.0): k_eff = 1 at any
+    # position — the same deep state melts immediately.
+    everywhere = MeltRoutingController(2; young_fraction=1.0)
+    s, snap = mk(16, 1)
+    @test decide(everywhere, snap) isa MeltAction
+
+    # The melt budget gate and the certificate requirement are untouched:
+    # without a consolidation reference the site can never be invalidated.
+    s = mksub()
+    s.sites[1].commit_sign = Int8(0)
+    s.telemetry[1].consecutive_conflicted = Int32(9)
+    snap = create_snapshot(1, s.region_map.regions[1], s.sites[1],
+        s.telemetry[1], true, 11)
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa NoAction
+    # ...and with the melt budget exhausted, no melt either.
+    s, snap = mk(11, 1)
+    snap = create_snapshot(1, s.region_map.regions[1], s.sites[1],
+        s.telemetry[1], false, 11)
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa NoAction
+end
+
+@testset "E0f — kernel: young certificate melts one tick early" begin
+    # Live accrual through reference_material_tick!: opposed load (g = -0.6,
+    # beta = 0 re-derives the EMA exactly) accrues one conflicted tick per
+    # tick. MROUTE (young) melts on the FIRST; the phase machine on the SECOND.
+    # The consolidated initializer builds sites WITHOUT a consolidation
+    # reference (commit_sign = 0 — the certificate can never fire on it), so
+    # the reference is stamped by hand exactly as in the E0c committed-side
+    # fixture above.
+    mksub = () -> begin
+        s = initialize_fp_consolidated_substrate(64; region_size=64,
+            initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+        site1 = s.sites[1]
+        site1.commit_sign = Int8(1)
+        site1.commit_stress = 0.5f0
+        site1.consolidation_tick = Int32(5)
+        s
+    end
+    g = fill(-0.6f0, 64)
+
+    mroute = mksub()
+    r = reference_material_tick!(mroute, g, NEWTONIAN, MELT_ROUTING_CONTROLLER,
+        RampedVPS(2); beta=0.0f0, gamma=0.0f0, tick=11)
+    @test any(a -> a isa MeltAction && a.site_index == Int32(1), r.actions)
+    @test mroute.sites[1].superplastic
+
+    phase = mksub()
+    r1 = reference_material_tick!(phase, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER,
+        RampedVPS(2); beta=0.0f0, gamma=0.0f0, tick=11)
+    @test !any(a -> a isa MeltAction, r1.actions)
+    @test !phase.sites[1].superplastic
+    r2 = reference_material_tick!(phase, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER,
+        RampedVPS(2); beta=0.0f0, gamma=0.0f0, tick=12)
+    @test any(a -> a isa MeltAction && a.site_index == Int32(1), r2.actions)
+    @test check_invariants(mroute)
+    @test check_invariants(phase)
+end
+
+@testset "E0f — commit side is the phase machine's in both windows" begin
+    # Fresh melt DEEP in the phase (age 1 < k_commit): MROUTE refuses exactly
+    # like the phase machine — no remission even though the tag is aligned —
+    # while the E0e remission arms would commit.
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)
+        st.plastic_since = Int32(plastic_since)
+        t = s.telemetry[1]
+        t.consecutive_stable = Int32(2)
+        t.stress_ema = 0.05f0
+        t.signed_stress_ema = 0.05f0
+        return (s, create_snapshot(1, s.region_map.regions[1], st, t, true, tick))
+    end
+    s, snap = mk(16, 15)                    # tip 5 deep, plastic age 1
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(REGIME_ADAPTIVE_CONTROLLER, snap) isa NoAction   # deep: dwell too
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction   # the contrast
+    # Age 2: commit fires, identical to the phase machine's.
+    s, snap = mk(17, 15)
+    @test action_code(decide(MELT_ROUTING_CONTROLLER, snap)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap))
+    @test decide(MELT_ROUTING_CONTROLLER, snap) isa CommitAction
+
+    # Budget membership: on an all-settle seed (no committed sites, so the
+    # melt lever is unreachable) MROUTE and PHASE produce identical action
+    # streams — same sites admitted per tick under the 1/tick budget.
+    g = fill(0.01f0, 64)
+    prints = Dict{Symbol,Vector{Vector{Tuple{Symbol,Int32}}}}()
+    for (name, dcp) in ((:phase, PHASE_MACHINE_CONTROLLER),
+                        (:mroute, MELT_ROUTING_CONTROLLER))
+        sub = mksub()
+        prints[name] = Vector{Tuple{Symbol,Int32}}[]
+        for tick in 1:4
+            r = reference_material_tick!(sub, g, NEWTONIAN, dcp, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(prints[name], action_code.(r.actions))
+        end
+        @test check_invariants(sub)
+    end
+    @test prints[:mroute] == prints[:phase]
+end
+
+@testset "E0f — undeclared phase length is a HardFailure for MROUTE" begin
+    sub = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)   # no phase_length declared
+    st = sub.sites[1]
+    st.commit_sign = Int8(1)
+    st.plastic_since = Int32(10)
+    snap = create_snapshot(1, sub.region_map.regions[1], st,
+        sub.telemetry[1], true, 11)
+    @test_throws ErrorException decide(MELT_ROUTING_CONTROLLER, snap)
+    # Committed-side lever also requires the declaration.
+    csub = initialize_fp_consolidated_substrate(64; region_size=64)
+    csnap = create_snapshot(1, csub.region_map.regions[1], csub.sites[1],
+        csub.telemetry[1], true, 11)
+    @test_throws ErrorException decide(MELT_ROUTING_CONTROLLER, csnap)
+    # The phase machine is unaffected on the same snapshots.
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, csnap) isa NoAction
+end
+
+@testset "E0f — MROUTE end-to-end determinism with declared phase length" begin
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    N = num_material_sites(mlp)
+
+    mk_state = (m) -> initialize_material_training(m, initialize_fp_seed(N;
+        region_size=64, settle_down=0.0f0, eta=1.0f0,
+        hardening_increment=0.05f0, epsilon_delta=1.0f6,
+        k_yield=2, k_settle=2, phase_length=8))
+
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=MELT_ROUTING_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+        phase_length=8,
+    )
+
+    X = Float32[1 -1; 1 -1]
+    Y = Float32[1 -1]
+
+    mlp1 = mlp
+    mlp2 = deepcopy(mlp)
+    st1 = mk_state(mlp1)
+    st2 = mk_state(mlp2)
+
+    for _ in 1:40
+        material_training_step!(mlp1, st1, X, Y, cfg)
+    end
+    for _ in 1:40
+        material_training_step!(mlp2, st2, X, Y, cfg)
+    end
+
+    fp1 = [_tpm_bits(Float32(x)) for x in vec(mlp1.H_FP32)]
+    fp2 = [_tpm_bits(Float32(x)) for x in vec(mlp2.H_FP32)]
+    @test fp1 == fp2
+    @test check_invariants(st1, mlp1)
+    @test check_invariants(st2, mlp2)
+end
