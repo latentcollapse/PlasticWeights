@@ -8,6 +8,9 @@ The material branch is parameterized by:
 - a DCP,
 - an exposure policy,
 - stress/residual EMA coefficients,
+- an optional declared phase length (`phase_length`, 0 = undeclared): E0e
+  regime metadata forwarded to every material tick so regime-adaptive DCPs
+  can route on phase position (harness-declared, DCP-inert),
 
 while the conventional FP32 head uses the same `AdamConfig` helper as C3.
 
@@ -30,6 +33,7 @@ struct MaterialTrainingConfig{
     head::AdamConfig
     beta::Float32
     gamma::Float32
+    phase_length::Int
 
     function MaterialTrainingConfig(
         law::L,
@@ -38,6 +42,7 @@ struct MaterialTrainingConfig{
         head::AdamConfig,
         beta::Real,
         gamma::Real,
+        phase_length::Integer,
     ) where {
         L<:ConstitutiveLaw,
         D<:DCP,
@@ -50,8 +55,10 @@ struct MaterialTrainingConfig{
             error("HardFailure: material beta must be finite and in [0,1]")
         isfinite(γ) && 0.0f0 <= γ <= 1.0f0 ||
             error("HardFailure: material gamma must be finite and in [0,1]")
+        phase_length >= 0 ||
+            error("HardFailure: material phase_length must be >= 0 (0 = undeclared), got $phase_length")
 
-        new{L,D,P}(law, dcp, policy, head, β, γ)
+        new{L,D,P}(law, dcp, policy, head, β, γ, Int(phase_length))
     end
 end
 
@@ -62,7 +69,8 @@ MaterialTrainingConfig(;
     head::AdamConfig=DEFAULT_ADAM,
     beta::Real=0.9f0,
     gamma::Real=0.9f0,
-) = MaterialTrainingConfig(law, dcp, policy, head, beta, gamma)
+    phase_length::Integer=0,
+) = MaterialTrainingConfig(law, dcp, policy, head, beta, gamma, phase_length)
 
 const DEFAULT_MATERIAL_TRAINING = MaterialTrainingConfig()
 
@@ -292,6 +300,7 @@ function material_training_step!(
         gamma=config.gamma,
         tick=next_tick,
         recorder=recorder,
+        phase_length=config.phase_length,
     )
 
     # `reference_material_tick!` takes its own immutable snapshot. It must be

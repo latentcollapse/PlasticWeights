@@ -16,7 +16,7 @@ function _region_map(num_sites::Integer, region_size::Integer;
                      yield_up::Real, settle_down::Real, eta::Real,
                      hardening_increment::Real, epsilon_delta::Real,
                      k_yield::Integer, k_settle::Integer,
-                     conflict_k::Integer=4)
+                     conflict_k::Integer=4, phase_length::Integer=0)
     return RegionMap(num_sites, region_size;
         yield_up=yield_up,
         settle_down=settle_down,
@@ -25,7 +25,8 @@ function _region_map(num_sites::Integer, region_size::Integer;
         epsilon_delta=epsilon_delta,
         k_yield=k_yield,
         k_settle=k_settle,
-        conflict_k=conflict_k)
+        conflict_k=conflict_k,
+        phase_length=phase_length)
 end
 
 """
@@ -74,7 +75,8 @@ function initialize_consolidated_substrate(num_sites::Integer; region_size::Inte
                                            epsilon_delta::Real=0.1f0,
                                            k_yield::Integer=3,
                                            k_settle::Integer=3,
-                                conflict_k::Integer=4)::SubstrateState
+                                conflict_k::Integer=4,
+                                phase_length::Integer=0)::SubstrateState
     q in (-1, 0, 1) || error("HardFailure: q must be ternary")
     0 <= max_superplastic <= num_sites ||
         error("HardFailure: max_superplastic must be in 0:num_sites")
@@ -82,7 +84,7 @@ function initialize_consolidated_substrate(num_sites::Integer; region_size::Inte
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
         epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
-        conflict_k=conflict_k)
+        conflict_k=conflict_k, phase_length=phase_length)
     pool = HotPool(num_sites)
     sites = [SiteState(q, true, false, 0) for _ in 1:num_sites]
     telemetry = [SiteTelemetry() for _ in 1:num_sites]
@@ -107,12 +109,13 @@ function initialize_fp_seed(num_sites::Integer;
                             epsilon_delta::Real=0.1f0,
                             k_yield::Integer=3,
                             k_settle::Integer=3,
-                            conflict_k::Integer=4)::SubstrateState{FPSiteState}
+                            conflict_k::Integer=4,
+                            phase_length::Integer=0)::SubstrateState{FPSiteState}
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
         epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
-        conflict_k=conflict_k)
+        conflict_k=conflict_k, phase_length=phase_length)
     pool = HotPool(num_sites)
     sites = Vector{FPSiteState}(undef, num_sites)
     telemetry = [SiteTelemetry() for _ in 1:num_sites]
@@ -142,14 +145,15 @@ function initialize_fp_consolidated_substrate(num_sites::Integer;
                                               epsilon_delta::Real=0.1f0,
                                               k_yield::Integer=3,
                                               k_settle::Integer=3,
-                                conflict_k::Integer=4)::SubstrateState{FPSiteState}
+                                conflict_k::Integer=4,
+                                phase_length::Integer=0)::SubstrateState{FPSiteState}
     0 <= max_superplastic <= num_sites ||
         error("HardFailure: max_superplastic must be in 0:num_sites")
     region_map = _region_map(num_sites, region_size;
         yield_up=yield_up, settle_down=settle_down, eta=eta,
         hardening_increment=hardening_increment,
         epsilon_delta=epsilon_delta, k_yield=k_yield, k_settle=k_settle,
-        conflict_k=conflict_k)
+        conflict_k=conflict_k, phase_length=phase_length)
     pool = HotPool(num_sites)
     w_init = initial_weights === nothing ? zeros(Float32, num_sites) : Float32.(initial_weights)
     length(w_init) == num_sites || error("HardFailure: initial_weights length mismatch")
@@ -168,6 +172,10 @@ function check_invariants(substrate::SubstrateState)
     check_invariants(substrate.pool)
     check_invariants(substrate.region_map)
     0 <= substrate.max_superplastic <= n || error("HardFailure: invalid superplastic budget")
+    for region in substrate.region_map.regions
+        region.phase_length >= 0 ||
+            error("HardFailure: region phase_length must be >= 0 (0 = undeclared)")
+    end
 
     owned = Int32[]
     for site in substrate.sites

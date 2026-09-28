@@ -69,6 +69,8 @@ struct FPSnapshot <: AbstractSnapshot
     commit_stress::Float32
     melt_tag_agrees::Bool
     consecutive_conflicted_undirected::Int32
+    phase_length::Int32
+    ticks_into_phase::Int32
 
     function FPSnapshot(site_index::Integer, w::Real,
                         allocated::Bool, superplastic::Bool,
@@ -85,11 +87,29 @@ struct FPSnapshot <: AbstractSnapshot
                         plastic_since::Integer=0,
                         commit_stress::Real=0.0,
                         melt_tag_agrees::Bool=false,
-                        consecutive_conflicted_undirected::Integer=0)
+                        consecutive_conflicted_undirected::Integer=0,
+                        phase_length::Integer=0,
+                        ticks_into_phase::Integer=-1)
         wf = Float32(w)
         isfinite(wf) || error("HardFailure: snapshot w must be finite, got $wf")
         commit_sign in (-1, 0, 1) ||
             error("HardFailure: snapshot commit_sign must be in {-1,0,1}")
+        # E0e phase-position metadata (harness-declared, DCP-inert):
+        # phase_length is the declared length of the current training phase;
+        # ticks_into_phase is DERIVED from the authoritative tick unless a
+        # caller with an out-of-band clock supplies it explicitly.
+        L = Int32(phase_length)
+        L >= 0 || error("HardFailure: snapshot phase_length must be >= 0, got $L")
+        tip = Int32(ticks_into_phase)
+        if L == 0
+            tip == 0 || error("HardFailure: snapshot with no declared phase_length must report 0 ticks_into_phase, got $tip")
+        else
+            if tip < 0
+                tip = Int32(mod(tick - 1, L))
+            end
+            Int32(0) <= tip < L ||
+                error("HardFailure: snapshot ticks_into_phase $tip out of range [0, $(L-1)] for phase_length $L")
+        end
         new(Int32(site_index), wf, allocated, superplastic,
             Float32(stress_ema), Float32(residual_motion_ema),
             Int32(consecutive_above_yield), Int32(consecutive_stable),
@@ -98,13 +118,16 @@ struct FPSnapshot <: AbstractSnapshot
             Int32(conflict_k), Int32(consecutive_conflicted),
             Int32(consolidation_tick), Int8(commit_sign), Int32(plastic_since),
             Float32(commit_stress), Bool(melt_tag_agrees),
-            Int32(consecutive_conflicted_undirected))
+            Int32(consecutive_conflicted_undirected), L, tip)
     end
 end
 
 function create_snapshot(site_index::Integer, region::RegionState,
                          site::SiteState, telemetry::SiteTelemetry,
-                         melt_budget_available::Bool, tick::Integer)::Snapshot
+                         melt_budget_available::Bool, tick::Integer;
+                         phase_length::Union{Nothing,Integer}=nothing)::Snapshot
+    # Ternary sites carry no regime metadata (the phase family decides only on
+    # FPSnapshots); the keyword is accepted for kernel call uniformity.
     return Snapshot(site_index, site.q, site.allocated, site.superplastic,
         telemetry.stress_ema, telemetry.residual_motion_ema,
         telemetry.consecutive_above_yield, telemetry.consecutive_stable,
@@ -112,9 +135,20 @@ function create_snapshot(site_index::Integer, region::RegionState,
         region.epsilon_delta, melt_budget_available, tick)
 end
 
+"""
+    create_snapshot(...; phase_length=nothing)
+
+E0e: the effective declared phase length is the caller's `phase_length` when
+positive (the harness's per-run declaration wins), else the region's declared
+`phase_length`. 0 from both sources means "not declared" and is passed through
+so the snapshot constructor's validation decides what it means per controller.
+"""
 function create_snapshot(site_index::Integer, region::RegionState,
                          site::FPSiteState, telemetry::SiteTelemetry,
-                         melt_budget_available::Bool, tick::Integer)::FPSnapshot
+                         melt_budget_available::Bool, tick::Integer;
+                         phase_length::Union{Nothing,Integer}=nothing)::FPSnapshot
+    declared = phase_length === nothing ? Int(region.phase_length) : Int(phase_length)
+    effective = declared > 0 ? declared : Int(region.phase_length)
     return FPSnapshot(site_index, site.w, site.allocated, site.superplastic,
         telemetry.stress_ema, telemetry.residual_motion_ema,
         telemetry.consecutive_above_yield, telemetry.consecutive_stable,
@@ -129,5 +163,7 @@ function create_snapshot(site_index::Integer, region::RegionState,
         melt_tag_agrees=(site.commit_sign != 0 && isfinite(telemetry.signed_stress_ema) &&
                          telemetry.signed_stress_ema != 0.0f0 &&
                          sign(telemetry.signed_stress_ema) == site.commit_sign),
-        consecutive_conflicted_undirected=telemetry.consecutive_conflicted_undirected)
+        consecutive_conflicted_undirected=telemetry.consecutive_conflicted_undirected,
+        phase_length=effective,
+        ticks_into_phase=(effective > 0 ? mod(tick - 1, effective) : 0))
 end

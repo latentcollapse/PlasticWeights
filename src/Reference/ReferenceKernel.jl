@@ -33,7 +33,8 @@ function reference_material_tick!(substrate::SubstrateState,
     beta::Real=0.9f0,
     gamma::Real=0.9f0,
     tick::Integer=1,
-    recorder::Union{Nothing,DevelopmentalRecorder}=nothing)
+    recorder::Union{Nothing,DevelopmentalRecorder}=nothing,
+    phase_length::Integer=0)
     n = length(substrate.sites)
     length(gradients) == n || error("HardFailure: gradient/site length mismatch")
 
@@ -110,8 +111,27 @@ function reference_material_tick!(substrate::SubstrateState,
     # budget turns any wave into a bounded-rate stream. Sites not admitted this
     # tick keep their counters (settle is persistent), so they are admitted on
     # following ticks. The frozen FixedRuleController path is exempt: its
-    # batch-commit behavior is part of the frozen reference contract.
-    commit_budget = dcp isa PhaseMachineController ? 1 : typemax(Int)
+    # batch-commit behavior is part of the frozen reference contract. E0d's
+    # TAGR/UNDIR arms ran unbudgeted and stay unbudgeted (committed-arm
+    # behavior is preserved bit-exactly). E0e (E0e-D1): the regime-adaptive
+    # arm's budget FOLLOWS ITS WINDOW — young = the TAGR rule in full (no
+    # budget), deep = the PHASE rule in full (1/tick). `budgeted=true` keeps
+    # the 1/tick budget in both windows for protocol-parity studies. The
+    # run-wide declaration resolves exactly as decide() resolves it per
+    # snapshot: explicit argument first, else the first region's declared
+    # length (regions share the declaration in every protocol; undeclared +
+    # REGIME remains a HardFailure).
+    young_window = false
+    if dcp isa RegimeAdaptiveController
+        declared_L = phase_length > 0 ? phase_length :
+                     Int(substrate.region_map.regions[1].phase_length)
+        young_window = _regime_young_phase(dcp, declared_L, tick)
+    end
+    commit_budget =
+        dcp isa PhaseMachineController ? 1 :
+        dcp isa RegimeAdaptiveController ?
+            (dcp.budgeted || !young_window ? 1 : typemax(Int)) :
+        typemax(Int)
 
     for i in eachindex(substrate.sites)
         site = substrate.sites[i]
@@ -127,7 +147,8 @@ function reference_material_tick!(substrate::SubstrateState,
             site,
             substrate.telemetry[i],
             budget_available,
-            tick,
+            tick;
+            phase_length=phase_length,
         )
 
         action = decide(dcp, snapshot)

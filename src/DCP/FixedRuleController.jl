@@ -81,6 +81,87 @@ const UNDIRECTED_CONTROLLER = UndirectedController()
 struct FixedRuleController <: DCP end
 const FIXED_RULE_CONTROLLER = FixedRuleController()
 
+"""
+    RegimeAdaptiveController(k_commit=2; young_fraction=0.5)
+
+E0e (Pass 3b): regime-adaptive routing — the synthesis of E0d's two-mechanism
+result. The history effect decomposed into (A) tag-carried memory, dominating
+SHORT phases (TAGR beat PHASE at L ≤ 75), and (B) melt/recommit churn,
+dominating LONG phases (PHASE beat TAGR at L=150). Both mechanisms are
+direction-gated, so the regime test asks only: which mechanism does THIS phase
+need? The controller routes by phase position, using the harness-declared
+regime metadata (`region.phase_length`, `snapshot.ticks_into_phase`):
+
+- **Young phase** (`ticks_into_phase < young_fraction · phase_length`): tag-
+  aligned melted sites commit on the first certified settle tick — dwell
+  REMITTED (the TAGR arm; mechanism A). The phase just re-pointed; previously-
+  validated material aligned with the new load should be spent immediately.
+- **Deep phase** (position at or beyond the boundary): identical to the
+  PhaseMachineController — no remission (mechanism B). Churn carries the
+  long-phase gains; remission short-circuits it (E0d-R2's mechanistic failure).
+
+The melt side is byte-identical to the phase machine's (direction-sensitive
+conflict certificate), so anti-ossification strength is unchanged by
+construction; the routing decision remains per-site and load-gated (settle
+certificate + melt margin) exactly as in E0d. The controller stays STATELESS:
+regime position is declared harness metadata carried on every snapshot, not
+controller memory (the "Stateless Stage-0 fixed-rule DCP" contract holds).
+
+`young_fraction` defaults to 0.5 (E1c's map says the transition sits between
+the per-phase scales where remission wins and where churn wins; the half-way
+boundary is the preregistered cut). Requires an explicitly declared phase
+length: a region with `phase_length == 0` is a HardFailure at decision time,
+so the arm cannot silently degenerate into the phase machine.
+
+The E0e short-window finding (E0e-D1, pre-grid): under the phase machine's
+1/tick commit budget, dwell remission is behaviorally INERT — the budget
+queue, not `k_commit`, gates recommit timing — so a budgeted regime arm is
+byte-identical to the phase machine and mechanism A cannot appear. The young
+window therefore must carry the TAGR rule in full (remission AND no commit
+budget), while the deep window carries the PHASE rule in full (dwell AND the
+1/tick budget). `budgeted=true` (default) keeps the budget in BOTH windows
+for protocol-parity studies; `budgeted=false` is the preregistered synthesis
+arm: young window = TAGR conditions, deep window = PHASE conditions.
+"""
+struct RegimeAdaptiveController <: DCP
+    k_commit::Int32
+    young_fraction::Float32
+    budgeted::Bool
+    function RegimeAdaptiveController(k_commit::Integer=2;
+                                      young_fraction::Real=0.5,
+                                      budgeted::Bool=true)
+        k_commit >= 1 ||
+            error("HardFailure: RegimeAdaptiveController k_commit must be >= 1")
+        yf = Float32(young_fraction)
+        isfinite(yf) && 0.0f0 < yf <= 1.0f0 ||
+            error("HardFailure: RegimeAdaptiveController young_fraction must be in (0,1], got $yf")
+        new(Int32(k_commit), yf, budgeted)
+    end
+end
+
+const REGIME_ADAPTIVE_CONTROLLER = RegimeAdaptiveController()
+
+"""Young-window boundary in ticks: the number of leading ticks `t` with
+`t < young_fraction · L`. Computed in Float64 with a relative snap tolerance
+so binary-inexact fractions (0.2f0 · 10 = 2.000000003) cannot shift an exact
+integer boundary by one tick; genuinely fractional boundaries round up (a tick
+at 7.5 of 15 is still young), matching the strict `<` in the contract."""
+function _young_boundary_ticks(young_fraction::Float32, phase_length::Int32)::Int32
+    b = Float64(young_fraction) * Float64(phase_length)
+    return Int32(ceil(b - 1e-6 * max(1.0, b)))
+end
+
+"""Kernel-side single source of truth for the regime window at `tick`:
+young iff (tick − 1) mod phase_length is inside the young boundary. Used both
+by the commit budget and (indirectly, via the snapshot) by the decision."""
+function _regime_young_phase(controller::RegimeAdaptiveController,
+                             phase_length::Integer, tick::Integer)::Bool
+    phase_length > 0 ||
+        error("HardFailure: RegimeAdaptiveController requires a declared positive phase_length")
+    tip = mod(tick - 1, phase_length)
+    return tip < _young_boundary_ticks(controller.young_fraction, Int32(phase_length))
+end
+
 function decide(::FixedRuleController, snapshot::Snapshot)::LifecycleAction
     if snapshot.allocated && !snapshot.superplastic &&
        snapshot.consecutive_above_yield >= snapshot.k_yield &&
@@ -121,8 +202,8 @@ function decide(::FixedRuleController, snapshot::FPSnapshot)::LifecycleAction
 end
 
 """
-Shared E0d/E0c plastic-site commit decision. `remit_dwell` is the flag that
-varies between the phase machine (false) and tag routing (true).
+Shared E0d/E0e/E0c plastic-site commit decision. `remit_dwell` is the flag
+that varies between the phase machine (false) and the routing arms (true).
 """
 function _plastic_commit_decision(snapshot::FPSnapshot, k_commit::Int32,
                                   remit_dwell::Bool)::LifecycleAction
@@ -176,6 +257,35 @@ function decide(controller::TagRoutingController, snapshot::FPSnapshot)::Lifecyc
     # Plastic sites: dwell remitted for tag-aligned melts.
     if snapshot.allocated && snapshot.superplastic
         return _plastic_commit_decision(snapshot, controller.k_commit, true)
+    end
+
+    return NO_ACTION
+end
+
+function decide(controller::RegimeAdaptiveController, snapshot::FPSnapshot)::LifecycleAction
+    # Regime declaration is mandatory for this arm: no silent degeneration to
+    # the phase machine when the harness forgot to declare a phase length.
+    snapshot.phase_length > 0 ||
+        error("HardFailure: RegimeAdaptiveController requires a declared positive region phase_length")
+
+    # Committed sites: identical invalidation to the phase machine — the
+    # regime test varies ONLY the commit-side remission window, so anti-
+    # ossification strength is unchanged by construction.
+    if snapshot.allocated && !snapshot.superplastic
+        if snapshot.commit_sign != 0 &&
+           snapshot.consecutive_conflicted >= snapshot.conflict_k
+            snapshot.melt_budget_available || return NO_ACTION
+            return MeltAction(snapshot.site_index)
+        end
+        return NO_ACTION
+    end
+
+    # Plastic sites: remit dwell while the phase is young; behave exactly like
+    # the phase machine once it is deep.
+    if snapshot.allocated && snapshot.superplastic
+        young = snapshot.ticks_into_phase <
+                _young_boundary_ticks(controller.young_fraction, snapshot.phase_length)
+        return _plastic_commit_decision(snapshot, controller.k_commit, young)
     end
 
     return NO_ACTION

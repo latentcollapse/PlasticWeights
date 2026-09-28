@@ -1,0 +1,55 @@
+==============================================================================================================
+E0e — regime-adaptive routing (Pass 3b): young remission, deep churn — preregistered [mode: checks]
+==============================================================================================================
+
+==============================================================================================================
+ALL CACHED ROWS
+==============================================================================================================
+PHASE  L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 M=  46
+REGIME L= 15 | pf= 0.3033 retM= 0.9434 gain=+0.0364 | hot= 0.86 jump=0.288 | C=  83 M=  64
+REGIME_B L= 15 | pf= 0.3112 retM= 0.7608 gain=-0.0903 | hot= 0.93 jump=0.260 | C=  51 M=  46
+TAGR   L= 15 | pf= 0.2798 retM= 0.8764 gain=+0.1226 | hot= 0.82 jump=0.226 | C= 100 M=  73
+FIXED  L= 15 | pf= 0.3050 retM= 1.0181 gain=-0.0572 | hot= 0.72 jump=0.324 | C=  41 M=   7
+PHASE  L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 M= 248
+REGIME L= 40 | pf= 0.0825 retM= 0.8505 gain=+0.1414 | hot= 0.53 jump=0.567 | C= 332 M= 271
+REGIME_B L= 40 | pf= 0.0863 retM= 0.8315 gain=+0.0205 | hot= 0.71 jump=0.527 | C= 288 M= 248
+TAGR   L= 40 | pf= 0.0851 retM= 0.8745 gain=+0.1372 | hot= 0.40 jump=0.572 | C= 406 M= 345
+FIXED  L= 40 | pf= 0.0849 retM= 0.8606 gain=+0.1618 | hot= 0.35 jump=0.602 | C=  70 M=   6
+PHASE  L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 M= 396
+REGIME L= 75 | pf= 0.0551 retM= 0.8442 gain=+0.0757 | hot= 0.31 jump=0.590 | C= 401 M= 339
+REGIME_B L= 75 | pf= 0.0653 retM= 0.8408 gain=+0.0461 | hot= 0.46 jump=0.555 | C= 458 M= 396
+TAGR   L= 75 | pf= 0.0551 retM= 0.8493 gain=+0.0720 | hot= 0.28 jump=0.548 | C= 430 M= 368
+FIXED  L= 75 | pf= 0.0552 retM= 0.8408 gain=+0.0647 | hot= 0.25 jump=0.554 | C=  70 M=   6
+PHASE  L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 M= 218
+REGIME L=150 | pf= 0.0112 retM= 0.8508 gain=+0.3213 | hot= 0.10 jump=0.583 | C= 132 M=  68
+REGIME_B L=150 | pf= 0.0132 retM= 0.8586 gain=+0.4067 | hot= 0.20 jump=0.604 | C= 282 M= 218
+TAGR   L=150 | pf= 0.0112 retM= 0.8536 gain=+0.3254 | hot= 0.08 jump=0.765 | C= 127 M=  63
+FIXED  L=150 | pf= 0.0116 retM= 0.8689 gain=+0.3215 | hot= 0.07 jump=0.672 | C=  71 M=   7
+
+==============================================================================================================
+PREREGISTERED RESULT CHECKS (evaluated on available rows)
+==============================================================================================================
+
+L=15:  PHASE -0.0903  REGIME +0.0364  REGIME_B -0.0903  TAGR +0.1226  FIXED -0.0572  (meanGain)
+       pf:   PHASE 0.3112  REGIME 0.3033  REGIME_B 0.3112  TAGR 0.2798  FIXED 0.3050
+       melts: PHASE 46  REGIME 64  REGIME_B 46  TAGR 73 | commits: PHASE 51  REGIME 83  REGIME_B 51  TAGR 100
+
+L=40:  PHASE +0.0205  REGIME +0.1414  REGIME_B +0.0205  TAGR +0.1372  FIXED +0.1618  (meanGain)
+       pf:   PHASE 0.0863  REGIME 0.0825  REGIME_B 0.0863  TAGR 0.0851  FIXED 0.0849
+       melts: PHASE 248  REGIME 271  REGIME_B 248  TAGR 345 | commits: PHASE 288  REGIME 332  REGIME_B 288  TAGR 406
+
+L=75:  PHASE +0.0461  REGIME +0.0757  REGIME_B +0.0461  TAGR +0.0720  FIXED +0.0647  (meanGain)
+       pf:   PHASE 0.0653  REGIME 0.0551  REGIME_B 0.0653  TAGR 0.0551  FIXED 0.0552
+       melts: PHASE 396  REGIME 339  REGIME_B 396  TAGR 368 | commits: PHASE 458  REGIME 401  REGIME_B 458  TAGR 430
+
+L=150:  PHASE +0.4067  REGIME +0.3213  REGIME_B +0.4067  TAGR +0.3254  FIXED +0.3215  (meanGain)
+       pf:   PHASE 0.0132  REGIME 0.0112  REGIME_B 0.0132  TAGR 0.0112  FIXED 0.0116
+       melts: PHASE 218  REGIME 68  REGIME_B 218  TAGR 63 | commits: PHASE 282  REGIME 132  REGIME_B 282  TAGR 127
+
+C0 canary reproduction (PHASE@150 == E0d committed):   gain +0.4067 melts 218  [PASS]
+R1 short-window win (REGIME>PHASE at 15 and 40, REGIME(15)>0): +0.0364/+0.1414 vs -0.0903/+0.0205  [PASS]
+R2 long-window parity (REGIME(150) >= PHASE(150) − 5%):       +0.3213 vs +0.4067  [FAIL]
+R3 churn-trace parity (|REGIME−PHASE| melts <= 15% at 150):   68 vs 218  [FAIL]
+R4 adaptivity attribution (REGIME(150) > TAGR(150)):           +0.3213 vs +0.3254  [FAIL]
+R6 window parity (REGIME(150) == REGIME_B(150) gain and melts): FAIL
+R5 budget attribution (REGIME(15) > REGIME_B(15) ≈ PHASE(15)): +0.0364 vs -0.0903 (PHASE -0.0903)  [PASS]

@@ -497,3 +497,345 @@ end
     final_loss = 0.5f0 * sum(abs2, pred .- Y) / length(Y)
     @test final_loss < 0.05f0
 end
+
+# ---------------------------------------------------------------------------
+# E0e — regime-adaptive routing (Pass 3b).
+#
+# Contracts under test:
+#   1. Regime metadata is harness-declared (region/config) and DERIVED
+#      per-snapshot from the authoritative tick; it is DCP-inert for every
+#      committed arm and validated with HardFailure discipline.
+#   2. Young window: REGIME remits dwell exactly like TAGR (tag-aligned
+#      melted sites commit on the first certified settle tick).
+#   3. Deep window: REGIME is behaviorally the phase machine — dwell applies,
+#      commit-identical to PHASE and different from TAGR on the same state.
+#   4. The melt side is the phase machine's, independent of the window.
+#   5. Undeclared phase length is a HardFailure for REGIME (no silent
+#      degeneration), end to end through the training config path.
+#   6. REGIME joins the phase machine's 1/tick commit budget.
+# ---------------------------------------------------------------------------
+@testset "E0e — regime metadata on FPSnapshot" begin
+    # Undeclared by default: phase_length 0, ticks_into_phase 0.
+    sub0 = initialize_fp_seed(64; region_size=64)
+    snap0 = create_snapshot(1, sub0.region_map.regions[1], sub0.sites[1],
+        sub0.telemetry[1], true, 25)
+    @test snap0.phase_length == 0
+    @test snap0.ticks_into_phase == 0
+
+    # Region-declared: position is derived from the authoritative tick.
+    sub = initialize_fp_seed(64; region_size=64, phase_length=10)
+    snap = create_snapshot(1, sub.region_map.regions[1], sub.sites[1],
+        sub.telemetry[1], true, 25)
+    @test snap.phase_length == 10
+    @test snap.ticks_into_phase == mod(24, 10) == 4
+
+    # Config override wins over the region's declaration (harness declares
+    # per run; no substrate mutation, snapshot-level only).
+    snapov = create_snapshot(1, sub.region_map.regions[1], sub.sites[1],
+        sub.telemetry[1], true, 25; phase_length=40)
+    @test snapov.phase_length == 40
+    @test snapov.ticks_into_phase == 24
+
+    # Constructor validation: HardFailure discipline on regime metadata.
+    @test_throws ErrorException FPSnapshot(1, 0.5f0, true, true, 0.1f0, 0.0f0,
+        0, 0, 0.2f0, 0.8f0, 2, 2, 0.02f0, true, 11; phase_length=-5)
+    @test_throws ErrorException FPSnapshot(1, 0.5f0, true, true, 0.1f0, 0.0f0,
+        0, 0, 0.2f0, 0.8f0, 2, 2, 0.02f0, true, 11; phase_length=5,
+        ticks_into_phase=5)          # out of range [0, L-1]
+    @test_throws ErrorException FPSnapshot(1, 0.5f0, true, true, 0.1f0, 0.0f0,
+        0, 0, 0.2f0, 0.8f0, 2, 2, 0.02f0, true, 11; phase_length=0,
+        ticks_into_phase=3)          # position without a declared length
+    ok = FPSnapshot(1, 0.5f0, true, true, 0.1f0, 0.0f0,
+        0, 0, 0.2f0, 0.8f0, 2, 2, 0.02f0, true, 11; phase_length=5,
+        ticks_into_phase=4)
+    @test ok.phase_length == 5 && ok.ticks_into_phase == 4
+end
+
+@testset "E0e — RegimeAdaptiveController construction" begin
+    @test RegimeAdaptiveController(2).k_commit == Int32(2)
+    @test RegimeAdaptiveController(2).young_fraction == 0.5f0
+    @test RegimeAdaptiveController(2; young_fraction=1.0).young_fraction == 1.0f0
+    @test_throws ErrorException RegimeAdaptiveController(0)
+    @test_throws ErrorException RegimeAdaptiveController(2; young_fraction=0.0)
+    @test_throws ErrorException RegimeAdaptiveController(2; young_fraction=1.5)
+    @test_throws ErrorException RegimeAdaptiveController(2; young_fraction=NaN32)
+end
+
+@testset "E0e — young window remits dwell (TAGR-equivalent)" begin
+    # Same fixture as the E0d remission test, with a DECLARED phase length.
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    for tick in (11, 13)            # ticks_into_phase 0 and 2, both < 5
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)    # aligned with the load below
+        st.plastic_since = Int32(10)
+        s.telemetry[1].consecutive_stable = Int32(2)  # certificate saturated
+        s.telemetry[1].stress_ema = 0.05f0            # melt margin holds
+        s.telemetry[1].signed_stress_ema = 0.05f0     # direction agrees with tag
+        snap = create_snapshot(1, s.region_map.regions[1], st,
+            s.telemetry[1], true, tick)               # plastic age = tick - 10
+        @test snap.ticks_into_phase < 5               # young, by construction
+        a = decide(REGIME_ADAPTIVE_CONTROLLER, snap)
+        @test a isa CommitAction
+        # TAGR gives the same answer in the young window (remission equality).
+        @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction
+        # k_commit=5 exceeds the young-window ages here: remission is what
+        # fires, not age.
+        @test decide(RegimeAdaptiveController(5), snap) isa CommitAction
+    end
+end
+
+@testset "E0e — deep window is behaviorally the phase machine" begin
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)
+        st.plastic_since = Int32(plastic_since)
+        s.telemetry[1].consecutive_stable = Int32(2)
+        s.telemetry[1].stress_ema = 0.05f0
+        s.telemetry[1].signed_stress_ema = 0.05f0
+        return create_snapshot(1, s.region_map.regions[1], st,
+            s.telemetry[1], true, tick)
+    end
+
+    # Fresh melt DEEP in the phase (melted at tick 15 while young; now tick
+    # 16 = tip 5 deep, plastic age 1 < k_commit): the dwell applies to REGIME
+    # and PHASE alike. This is the E0e mechanism under test — melts land at
+    # every phase position, and only the YOUNG window fast-tracks them.
+    snap16 = mk(16, 15)
+    @test snap16.ticks_into_phase == 5
+    @test decide(REGIME_ADAPTIVE_CONTROLLER, snap16) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap16) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap16) isa CommitAction
+
+    # One tick later (tip 6, age 2 = k_commit): dwell satisfied, REGIME
+    # commits exactly when the phase machine commits.
+    snap17 = mk(17, 15)
+    @test snap17.ticks_into_phase == 6
+    @test action_code(decide(REGIME_ADAPTIVE_CONTROLLER, snap17)) ==
+          action_code(decide(PHASE_MACHINE_CONTROLLER, snap17))
+    @test decide(REGIME_ADAPTIVE_CONTROLLER, snap17) isa CommitAction
+
+    # Late-phase fresh melt (tick 19, tip 8, age 1): the deep refusal holds
+    # to the end of the phase; TAGR's unconditional remission still differs.
+    snap19 = mk(19, 18)
+    @test snap19.ticks_into_phase == 8
+    @test decide(REGIME_ADAPTIVE_CONTROLLER, snap19) isa NoAction
+    @test decide(PHASE_MACHINE_CONTROLLER, snap19) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap19) isa CommitAction
+end
+
+@testset "E0e — young_fraction moves the boundary" begin
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    mk = (tick, plastic_since) -> begin
+        s = mksub()
+        st = s.sites[1]
+        st.commit_sign = Int8(1)
+        st.plastic_since = Int32(plastic_since)
+        s.telemetry[1].consecutive_stable = Int32(2)
+        s.telemetry[1].stress_ema = 0.05f0
+        s.telemetry[1].signed_stress_ema = 0.05f0
+        return create_snapshot(1, s.region_map.regions[1], st,
+            s.telemetry[1], true, tick)
+    end
+    # yf = 0.2, L = 10: young iff ticks_into_phase < 2 (boundary exclusive).
+    r02 = RegimeAdaptiveController(2; young_fraction=0.2)
+    @test decide(r02, mk(11, 10)) isa CommitAction     # tip 0, age 1: remitted
+    @test decide(r02, mk(12, 10)) isa CommitAction     # tip 1, age 2: remitted
+    @test decide(r02, mk(13, 12)) isa NoAction         # tip 2 (deep!), age 1: dwell applies
+    @test decide(TAG_ROUTING_CONTROLLER, mk(13, 12)) isa CommitAction  # the contrast
+    # yf = 1.0: the whole phase is young — remission everywhere.
+    r10 = RegimeAdaptiveController(2; young_fraction=1.0)
+    for (tick, ps) in ((11, 10), (13, 12), (16, 15), (19, 15))
+        @test decide(r10, mk(tick, ps)) isa CommitAction
+    end
+end
+
+@testset "E0e — melt side is the phase machine's, window-independent" begin
+    # A committed, conflicted site MUST melt at any phase position.
+    sub = initialize_fp_consolidated_substrate(64; region_size=64,
+        initial_weights=fill(0.5f0, 64), conflict_k=2, phase_length=10)
+    site = sub.sites[1]
+    site.commit_sign = Int8(1)
+    site.commit_stress = 0.5f0
+    site.consolidation_tick = Int32(5)
+    sub.telemetry[1].stress_ema = 0.6f0
+    sub.telemetry[1].signed_stress_ema = -0.6f0
+    for tip_tick in (11, 16)        # young and deep positions alike
+        t = sub.telemetry[1]
+        t.consecutive_conflicted = Int32(2)   # saturated for this region
+        snap = create_snapshot(1, sub.region_map.regions[1], site, t, true, tip_tick)
+        a = decide(REGIME_ADAPTIVE_CONTROLLER, snap)
+        @test a isa MeltAction && a.site_index == Int32(1)
+        # Same verdict as the phase machine on identical state.
+        @test action_code(decide(PHASE_MACHINE_CONTROLLER, snap)) ==
+              action_code(a)
+    end
+end
+
+@testset "E0e — undeclared phase length is a HardFailure for REGIME" begin
+    sub = initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2)   # phase_length undeclared
+    st = sub.sites[1]
+    st.commit_sign = Int8(1)
+    st.plastic_since = Int32(10)
+    sub.telemetry[1].consecutive_stable = Int32(2)
+    sub.telemetry[1].stress_ema = 0.05f0
+    sub.telemetry[1].signed_stress_ema = 0.05f0
+    snap = create_snapshot(1, sub.region_map.regions[1], st,
+        sub.telemetry[1], true, 11)
+    @test_throws ErrorException decide(REGIME_ADAPTIVE_CONTROLLER, snap)
+    # The other arms are unaffected (metadata is DCP-inert for them).
+    @test decide(PHASE_MACHINE_CONTROLLER, snap) isa NoAction
+    @test decide(TAG_ROUTING_CONTROLLER, snap) isa CommitAction
+
+    # End to end: the training config path cannot silently degenerate either.
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    state = initialize_material_training(mlp, sub)
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=REGIME_ADAPTIVE_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+    )
+    @test_throws ErrorException material_training_step!(mlp, state,
+        Float32[1 -1; 1 -1], Float32[1 -1], cfg)
+end
+
+@testset "E0e — REGIME joins the phase machine's commit budget" begin
+    # All-settle seed under a small consistent load: PHASE admits at most one
+    # commit per tick; REGIME must behave IDENTICALLY (seeds have
+    # plastic_since == 0, so remission is unreachable — only the budget is
+    # under test). Tick 1 commits nothing anywhere: the settle counter accrues
+    # live and reaches k_settle = 2 only on tick 2.
+    mk = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=50)
+    g = fill(0.01f0, 64)
+    counts = Dict{Symbol,Vector{Int}}()
+    prints = Dict{Symbol,Vector{Vector{Tuple{Symbol,Int32}}}}()
+    for (name, dcp) in ((:phase, PHASE_MACHINE_CONTROLLER),
+                        (:regime, REGIME_ADAPTIVE_CONTROLLER))
+        sub = mk()
+        per_tick = Int[]
+        prints[name] = Vector{Tuple{Symbol,Int32}}[]
+        for tick in 1:4
+            r = reference_material_tick!(sub, g, NEWTONIAN, dcp, ZCS();
+                beta=0.5f0, gamma=0.5f0, tick=tick)
+            push!(per_tick, count(a -> a isa CommitAction, r.actions))
+            push!(prints[name], action_code.(r.actions))
+        end
+        counts[name] = per_tick
+        @test all(<=(1), per_tick)                     # the budget itself
+        @test check_invariants(sub)
+    end
+    @test counts[:regime] == counts[:phase]            # identical admission
+    @test counts[:regime] == [0, 1, 1, 1]              # and the live pattern
+    @test prints[:regime] == prints[:phase]            # same sites, same ticks
+end
+
+@testset "E0e — unbudgeted young window runs the full TAGR rule (E0e-D1)" begin
+    # E0e-D1: under the 1/tick budget, dwell remission is behaviorally inert
+    # (the budget queue gates recommit timing, not k_commit). With
+    # budgeted=false, the YOUNG window therefore carries the TAGR rule in
+    # full — remission AND no commit budget — while the DEEP window keeps the
+    # phase machine's 1/tick budget.
+    saturate! = (sub) -> begin
+        for i in 1:64
+            st = sub.sites[i]
+            st.commit_sign = Int8(1)              # tag aligned with the load
+            st.plastic_since = Int32(10)          # fresh melt at tick 10
+            tl = sub.telemetry[i]
+            tl.consecutive_stable = Int32(2)      # settle certificate saturated
+            tl.stress_ema = 0.05f0                # melt margin holds
+            tl.signed_stress_ema = 0.05f0         # direction agrees with tag
+        end
+    end
+    mksub = () -> initialize_fp_seed(64; region_size=64, settle_down=0.0f0,
+        epsilon_delta=1.0f6, k_yield=2, k_settle=2, phase_length=10)
+    g = fill(0.01f0, 64)
+    regime = RegimeAdaptiveController(2; budgeted=false)
+
+    # Young tick (11, tip 0): every site is remittable AND unbudgeted —
+    # the frozen-contract-style batch commit TAGR would produce.
+    sub = mksub(); saturate!(sub)
+    r = reference_material_tick!(sub, g, NEWTONIAN, regime, ZCS();
+        beta=0.5f0, gamma=0.5f0, tick=11)
+    @test count(a -> a isa CommitAction, r.actions) == 64
+    @test check_invariants(sub)
+
+    # The same state under the phase machine: at tick 11 BOTH PHASE gates
+    # refuse — the sites melted at tick 10 have plastic age 1 < k_commit = 2
+    # (dwell), and the budget would admit only one anyway. Zero commits:
+    # these are exactly the two gates the young window lifts.
+    sub = mksub(); saturate!(sub)
+    rp11 = reference_material_tick!(sub, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER, ZCS();
+        beta=0.5f0, gamma=0.5f0, tick=11)
+    @test count(a -> a isa CommitAction, rp11.actions) == 0
+
+    # One tick later (age 2): dwell satisfied, the 1/tick budget admits one.
+    sub = mksub(); saturate!(sub)
+    rp12 = reference_material_tick!(sub, g, NEWTONIAN, PHASE_MACHINE_CONTROLLER, ZCS();
+        beta=0.5f0, gamma=0.5f0, tick=12)
+    @test count(a -> a isa CommitAction, rp12.actions) == 1
+
+    # And under TAGR itself: identical count to unbudgeted-young REGIME.
+    sub = mksub(); saturate!(sub)
+    rt = reference_material_tick!(sub, g, NEWTONIAN, TAG_ROUTING_CONTROLLER, ZCS();
+        beta=0.5f0, gamma=0.5f0, tick=11)
+    @test count(a -> a isa CommitAction, rt.actions) == 64
+
+    # Deep tick (16, tip 5): the budget is back — at most one commit even
+    # though every site's dwell is long satisfied.
+    sub = mksub(); saturate!(sub)
+    rd = reference_material_tick!(sub, g, NEWTONIAN, regime, ZCS();
+        beta=0.5f0, gamma=0.5f0, tick=16)
+    @test count(a -> a isa CommitAction, rd.actions) == 1
+    @test check_invariants(sub)
+end
+
+@testset "E0e — REGIME end-to-end determinism with declared phase length" begin
+    mlp = Stage0MLP(2, 32, 1; feature_size=2, rng_seed=71)
+    N = num_material_sites(mlp)
+
+    mk_state = (m) -> initialize_material_training(m, initialize_fp_seed(N;
+        region_size=64, settle_down=0.0f0, eta=1.0f0,
+        hardening_increment=0.05f0, epsilon_delta=1.0f6,
+        k_yield=2, k_settle=2, phase_length=8))
+
+    cfg = MaterialTrainingConfig(
+        law=NEWTONIAN,
+        dcp=REGIME_ADAPTIVE_CONTROLLER,
+        policy=RampedVPS(2),
+        head=AdamConfig(learning_rate=0.02f0),
+        beta=0.0f0,
+        gamma=0.0f0,
+        phase_length=8,
+    )
+
+    X = Float32[1 -1; 1 -1]
+    Y = Float32[1 -1]
+
+    mlp1 = mlp
+    mlp2 = deepcopy(mlp)
+    st1 = mk_state(mlp1)
+    st2 = mk_state(mlp2)
+
+    for _ in 1:40
+        material_training_step!(mlp1, st1, X, Y, cfg)
+    end
+    for _ in 1:40
+        material_training_step!(mlp2, st2, X, Y, cfg)
+    end
+
+    fp1 = [_tpm_bits(Float32(x)) for x in vec(mlp1.H_FP32)]
+    fp2 = [_tpm_bits(Float32(x)) for x in vec(mlp2.H_FP32)]
+    @test fp1 == fp2
+    @test check_invariants(st1, mlp1)
+    @test check_invariants(st2, mlp2)
+end

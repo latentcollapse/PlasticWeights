@@ -3,6 +3,12 @@
 
 Persistent Stage-0 material-region state. `yield_up` is mutable because every
 successful commit applies monotonic work-hardening.
+
+E0e: `phase_length` is the harness-declared length (in ticks) of the current
+training phase — DCP-inert regime metadata, in the region because regions are
+the substrate's declared regime records (and FPSnapshot reads it there). 0 =
+not declared: phase-family controllers other than the regime-adaptive one and
+the frozen FIXED contract ignore it entirely.
 """
 mutable struct RegionState
     id::Int32
@@ -16,6 +22,7 @@ mutable struct RegionState
     k_yield::Int32
     k_settle::Int32
     conflict_k::Int32
+    phase_length::Int32
 
     function RegionState(id::Integer, site_indices::AbstractVector{<:Integer};
         yield_up::Real=0.5f0,
@@ -25,7 +32,8 @@ mutable struct RegionState
         epsilon_delta::Real=0.1f0,
         k_yield::Integer=3,
         k_settle::Integer=3,
-        conflict_k::Integer=4)
+        conflict_k::Integer=4,
+        phase_length::Integer=0)
         isempty(site_indices) &&
             error("HardFailure: region $id has no sites")
 
@@ -58,9 +66,11 @@ mutable struct RegionState
         k_yield >= 1 || error("HardFailure: k_yield must be >= 1")
         k_settle >= 1 || error("HardFailure: k_settle must be >= 1")
         conflict_k >= 1 || error("HardFailure: conflict_k must be >= 1")
+        phase_length >= 0 ||
+            error("HardFailure: phase_length must be >= 0 (0 = undeclared), got $phase_length")
 
         new(Int32(id), idx, Int32(length(idx)), yu, sd, et, hi, ed,
-            Int32(k_yield), Int32(k_settle), Int32(conflict_k))
+            Int32(k_yield), Int32(k_settle), Int32(conflict_k), Int32(phase_length))
     end
 end
 
@@ -84,7 +94,8 @@ struct RegionMap
         epsilon_delta::Real=0.1f0,
         k_yield::Integer=3,
         k_settle::Integer=3,
-        conflict_k::Integer=4)
+        conflict_k::Integer=4,
+        phase_length::Integer=0)
         num_sites > 0 || error("HardFailure: num_sites must be positive")
         64 <= region_size <= 256 ||
             error("HardFailure: Stage-0 region_size must be in 64:256, got $region_size")
@@ -107,7 +118,8 @@ struct RegionMap
                 epsilon_delta=epsilon_delta,
                 k_yield=k_yield,
                 k_settle=k_settle,
-                conflict_k=conflict_k)
+                conflict_k=conflict_k,
+                phase_length=phase_length)
             for i in indices
                 site_to_region[i] = Int32(r)
             end
