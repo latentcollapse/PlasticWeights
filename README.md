@@ -1,5 +1,7 @@
 # PlasticWeights.jl — Stage-0 reference kernel
 
+This is an experimental repo. Just a wacky idea that I had I wanted to test out
+
 This repository is implementing the **frozen PlasticWeights v0.1.0 Stage-0 specification**. The current milestone is deliberately narrow: a deterministic CPU reference kernel and the causal sanity suite through S3b.
 
 ## Implemented in this pass
